@@ -1,7 +1,7 @@
 import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { validate } from '@tma.js/init-data';
+import { validate } from '@tma.js/init-data-node';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -18,7 +18,7 @@ app.use(express.json());
 app.use(express.static(join(__dirname, 'public')));
 
 // Middleware: валидация Telegram initData
-function telegramAuth(req, res, next) {
+async function telegramAuth(req, res, next) {
   const authHeader = req.headers.authorization || '';
   const [authType, authData = ''] = authHeader.split(' ');
 
@@ -27,8 +27,7 @@ function telegramAuth(req, res, next) {
   }
 
   try {
-    // expiresIn: 3600 — данные считаются валидными 1 час
-    const initData = validate(authData, BOT_TOKEN, { expiresIn: 3600 });
+    const initData = await validate(authData, BOT_TOKEN, { expiresIn: 3600 });
     req.telegramUser = initData.user;
     next();
   } catch (err) {
