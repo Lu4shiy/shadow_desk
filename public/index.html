@@ -6,50 +6,42 @@
   <title>Shadow Deck</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700&family=Montserrat:wght@400;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
     body { font-family: 'Montserrat', sans-serif; background: #121212; color: #eee; height: 100vh; overflow: hidden; display: flex; flex-direction: column; font-weight: 600; }
     h2, h3 { font-family: 'Montserrat', sans-serif; font-weight: 700; letter-spacing: 0.5px; }
     
-    /* Экран загрузки */
     #loading-screen { position: fixed; inset: 0; background: #121212; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 999; transition: opacity 0.5s ease; }
     .spinner { width: 50px; height: 50px; border: 4px solid #333; border-top-color: #9b59b6; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 20px; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* Всплывающее уведомление (Toast) */
     #toast { position: fixed; top: -100px; left: 50%; transform: translateX(-50%); background: #e74c3c; color: white; padding: 12px 24px; border-radius: 12px; font-weight: bold; box-shadow: 0 4px 15px rgba(231, 76, 60, 0.4); transition: top 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); z-index: 9999; text-align: center; width: 90%; max-width: 400px; }
     #toast.show { top: 20px; }
     #toast.success { background: #2ecc71; box-shadow: 0 4px 15px rgba(46, 204, 113, 0.4); }
 
-    /* Экран регистрации */
-    #register-screen { display: none; padding: 25px; flex-direction: column; justify-content: center; height: 100%; background: radial-gradient(circle at top, #2a1b38 0%, #121212 60%); }
-    .input-group { margin-bottom: 18px; }
-    .input-group label { display: block; margin-bottom: 8px; color: #bbb; font-size: 14px; margin-left: 4px; }
+    #register-screen { display: none; padding: 25px; flex-direction: column; justify-content: center; height: 100%; background: radial-gradient(circle at top, #2a1b38 0%, #121212 60%); overflow-y: auto; }
+    .input-group { margin-bottom: 15px; }
+    .input-group label { display: block; margin-bottom: 6px; color: #bbb; font-size: 13px; margin-left: 4px; }
     .input-group input { width: 100%; padding: 14px; border-radius: 12px; border: 1px solid #444; background: rgba(30, 30, 30, 0.8); color: #fff; font-size: 16px; outline: none; transition: all 0.2s; font-family: 'Montserrat', sans-serif; }
     .input-group input:focus { border-color: #9b59b6; box-shadow: 0 0 10px rgba(155, 89, 182, 0.2); }
     
-    /* Убираем системные стрелочки у поля ввода возраста */
-    input[type=number]::-webkit-inner-spin-button, 
-    input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
     input[type=number] { -moz-appearance: textfield; }
 
-    /* Кастомный чекбокс */
-    .checkbox-group { margin-bottom: 25px; position: relative; }
+    .checkbox-group { margin-bottom: 20px; position: relative; }
     .checkbox-group input[type="checkbox"] { display: none; }
-    .checkbox-group label { display: flex; align-items: flex-start; gap: 12px; color: #aaa; font-size: 14px; line-height: 1.4; cursor: pointer; user-select: none; }
+    .checkbox-group label { display: flex; align-items: flex-start; gap: 12px; color: #aaa; font-size: 13px; line-height: 1.4; cursor: pointer; user-select: none; }
     .checkbox-group label::before { content: ''; flex-shrink: 0; display: inline-block; width: 20px; height: 20px; border: 2px solid #71368a; border-radius: 6px; background: #1e1e1e; transition: all 0.2s; margin-top: 2px; }
     .checkbox-group input:checked + label::before { background: #9b59b6; box-shadow: 0 0 10px rgba(155, 89, 182, 0.6); border-color: #9b59b6; }
     .checkbox-group label::after { content: '✔'; position: absolute; left: 5px; top: 4px; color: white; font-size: 13px; opacity: 0; transition: opacity 0.2s; pointer-events: none; }
     .checkbox-group input:checked + label::after { opacity: 1; }
     
-    /* Кнопки */
     button { padding: 16px; border: none; border-radius: 12px; background: linear-gradient(135deg, #9b59b6, #71368a); color: white; font-size: 16px; font-family: 'Montserrat', sans-serif; font-weight: 600; cursor: pointer; width: 100%; box-shadow: 0 4px 15px rgba(155, 89, 182, 0.4); transition: transform 0.1s, box-shadow 0.1s; letter-spacing: 0.5px; }
     button:active { transform: scale(0.97); box-shadow: 0 2px 10px rgba(155, 89, 182, 0.3); }
     button:disabled { opacity: 0.7; pointer-events: none; }
 
-    /* Главный экран */
     #main-screen { display: none; flex-direction: column; height: 100%; }
     .header { display: flex; justify-content: space-between; padding: 15px; background: #1a1a1a; border-bottom: 1px solid #333; }
     .profile-info { display: flex; gap: 10px; align-items: center; cursor: pointer; transition: opacity 0.2s; }
@@ -62,24 +54,18 @@
     .resources { display: flex; flex-direction: column; gap: 5px; align-items: flex-end; }
     .res-item { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: bold; background: #222; padding: 4px 10px; border-radius: 12px; border: 1px solid #333; }
     .res-icon { width: 20px; height: 20px; object-fit: contain; display: inline-block; }
-    
     .content { padding: 20px; text-align: center; color: #666; }
 
-    /* Модальное окно профиля */
     .modal-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.8); backdrop-filter: blur(5px); display: none; justify-content: center; align-items: center; z-index: 2000; padding: 20px; }
-    .modal-content { background: #1e1e1e; border: 1px solid #333; border-radius: 16px; width: 100%; max-width: 400px; padding: 25px; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+    .modal-content { background: #1e1e1e; border: 1px solid #333; border-radius: 16px; width: 100%; max-width: 400px; padding: 25px; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,0.5); max-height: 90vh; overflow-y: auto; }
     .modal-close { position: absolute; top: 15px; right: 15px; background: transparent; border: none; color: #888; font-size: 24px; cursor: pointer; width: auto; padding: 0; box-shadow: none; }
     .modal-close:active { transform: none; color: #fff; }
-    
     .modal-section { margin-bottom: 20px; }
     .modal-section h4 { font-size: 14px; color: #aaa; margin-bottom: 10px; }
-    
     .btn-secondary { background: #333; box-shadow: none; margin-bottom: 10px; font-weight: 600; }
     .btn-secondary:active { background: #444; }
-    
     .btn-danger { background: #e74c3c; box-shadow: 0 4px 15px rgba(231, 76, 60, 0.4); }
     .btn-danger:active { background: #c0392b; }
-    
     .nickname-edit { display: flex; gap: 10px; }
     .nickname-edit input { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #444; background: #111; color: #fff; font-family: 'Montserrat', sans-serif; }
     .nickname-edit button { width: auto; padding: 12px 20px; }
@@ -92,31 +78,34 @@
   </div>
 
   <div id="register-screen">
-    <h2 style="text-align: center; margin-bottom: 25px; font-size: 24px;" id="auth-title">Создание профиля</h2>
+    <h2 style="text-align: center; margin-bottom: 20px; font-size: 24px;" id="auth-title">Создание профиля</h2>
     
     <div style="display: flex; gap: 10px; margin-bottom: 20px;">
       <button id="tab-login" style="flex: 1; padding: 10px; font-size: 14px; background: #333; box-shadow: none;">Вход</button>
       <button id="tab-register" style="flex: 1; padding: 10px; font-size: 14px;">Регистрация</button>
     </div>
+
     <div class="input-group">
       <label>Никнейм</label>
       <input type="text" id="reg-nickname" maxlength="15" placeholder="Ваш ник..." autocomplete="off" />
     </div>
-    <div class="input-group" id="age-group">
-      <label>Возраст</label>
+    
     <div class="input-group" id="age-group">
       <label>Возраст</label>
       <input type="number" id="reg-age" min="10" max="100" placeholder="Ваш возраст..." inputmode="numeric" />
     </div>
+    
     <div class="input-group">
       <label>Пароль</label>
       <input type="password" id="reg-password" placeholder="Ваш пароль..." />
     </div>
+    
     <div class="checkbox-group" id="tutorial-group">
       <input type="checkbox" id="reg-tutorial" />
       <label for="reg-tutorial">Я уже играл в подобные игры (Отключит обучение)</label>
     </div>
-    <button id="btn-auth">Войти в игру</button>
+    
+    <button id="btn-auth">Создать аккаунт</button>
   </div>
 
   <div id="main-screen">
@@ -141,7 +130,6 @@
     </div>
   </div>
 
-  <!-- Модальное окно профиля -->
   <div id="profile-modal" class="modal-overlay">
     <div class="modal-content">
       <button class="modal-close" id="close-profile">&times;</button>
@@ -180,7 +168,6 @@
     </div>
   </div>
 
-  <!-- Кастомное окно подтверждения -->
   <div id="confirm-modal" class="modal-overlay" style="z-index: 2500;">
     <div class="modal-content" style="text-align: center;">
       <h3 style="margin-bottom: 15px; color: #e74c3c;">Внимание</h3>
@@ -191,11 +178,8 @@
       </div>
     </div>
   </div>
-    </div>
-  </div>
 
   <div id="toast">Текст ошибки</div>
-
   <script src="app.js"></script>
 </body>
 </html>

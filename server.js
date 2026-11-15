@@ -42,10 +42,8 @@ pool.query(`
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(join(__dirname, 'public')));
 
-// Утилита для хэширования пароля
 const hashPassword = (pass) => crypto.createHash('sha256').update(pass).digest('hex');
 
-// Middleware: проверка Telegram (защита от внешних запросов)
 function telegramAuth(req, res, next) {
   const authHeader = req.headers.authorization || '';
   const [authType, authData = ''] = authHeader.split(' ');
@@ -62,7 +60,6 @@ function telegramAuth(req, res, next) {
   }
 }
 
-// Middleware: проверка авторизации игрока (по ID из localStorage)
 async function playerAuth(req, res, next) {
   const playerId = req.headers['x-player-id'];
   if (!playerId) return res.status(401).json({ error: 'Не авторизован' });
@@ -77,17 +74,11 @@ async function playerAuth(req, res, next) {
   }
 }
 
-// Health endpoint для UptimeRobot
-app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok', uptime: process.uptime() });
-});
-
-// Регистрация нового аккаунта
 app.post('/api/register', telegramAuth, async (req, res) => {
   const { nickname, password, age, tutorialDone } = req.body;
   try {
     const result = await pool.query(
-      'INSERT INTO players (nickname, password_hash, age, tutorial_done) VALUES ($1, $2, $3, $4) RETURNING id, nickname, age, tutorial_done, level, xp, crystals, coins, mana, badge, avatar_url',
+      'INSERT INTO players (nickname, password_hash, age, tutorial_done) VALUES ($1, $2, $3, $4) RETURNING id, nickname, level, xp, crystals, coins, mana, avatar_url',
       [nickname, hashPassword(password), age, tutorialDone]
     );
     res.json({ success: true, profile: result.rows[0] });
@@ -97,7 +88,6 @@ app.post('/api/register', telegramAuth, async (req, res) => {
   }
 });
 
-// Вход в аккаунт
 app.post('/api/login', telegramAuth, async (req, res) => {
   const { nickname, password } = req.body;
   try {
@@ -109,26 +99,24 @@ app.post('/api/login', telegramAuth, async (req, res) => {
       return res.status(400).json({ error: 'Неверный пароль' });
     }
     
-    delete player.password_hash; // Не отправляем пароль на клиент
+    delete player.password_hash;
     res.json({ success: true, profile: player });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Получить данные текущего профиля по ID
 app.get('/api/me', telegramAuth, playerAuth, (req, res) => {
   const player = req.player;
   delete player.password_hash;
   res.json({ success: true, profile: player });
 });
 
-// Смена никнейма
 app.put('/api/profile/nickname', telegramAuth, playerAuth, async (req, res) => {
   const { nickname } = req.body;
   try {
     const result = await pool.query(
-      'UPDATE players SET nickname = $1 WHERE id = $2 RETURNING id, nickname, level, xp, crystals, coins, mana, avatar_url',
+      'UPDATE players SET nickname = $1 WHERE id = $2 RETURNING nickname',
       [nickname.trim(), req.player.id]
     );
     res.json({ success: true, profile: result.rows[0] });
@@ -138,7 +126,6 @@ app.put('/api/profile/nickname', telegramAuth, playerAuth, async (req, res) => {
   }
 });
 
-// Смена пароля
 app.put('/api/profile/password', telegramAuth, playerAuth, async (req, res) => {
   const { newPassword } = req.body;
   try {
@@ -149,7 +136,6 @@ app.put('/api/profile/password', telegramAuth, playerAuth, async (req, res) => {
   }
 });
 
-// Смена аватарки (Base64)
 app.put('/api/profile/avatar', telegramAuth, playerAuth, async (req, res) => {
   const { avatarBase64 } = req.body;
   try {
@@ -162,6 +148,8 @@ app.put('/api/profile/avatar', telegramAuth, playerAuth, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
