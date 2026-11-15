@@ -1,7 +1,7 @@
 import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { validate } from '@tma.js/init-data-node';
+import { validate, parse } from '@tma.js/init-data-node';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -18,7 +18,7 @@ app.use(express.json());
 app.use(express.static(join(__dirname, 'public')));
 
 // Middleware: валидация Telegram initData
-async function telegramAuth(req, res, next) {
+function telegramAuth(req, res, next) {
   const authHeader = req.headers.authorization || '';
   const [authType, authData = ''] = authHeader.split(' ');
 
@@ -27,7 +27,8 @@ async function telegramAuth(req, res, next) {
   }
 
   try {
-    const initData = await validate(authData, BOT_TOKEN, { expiresIn: 3600 });
+    validate(authData, BOT_TOKEN, { expiresIn: 3600 });
+    const initData = parse(authData);
     req.telegramUser = initData.user;
     next();
   } catch (err) {
