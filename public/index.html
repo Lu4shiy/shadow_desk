@@ -43,8 +43,8 @@
     .level-xp { font-size: 12px; color: #aaa; margin-top: 4px; }
     
     .resources { display: flex; flex-direction: column; gap: 5px; align-items: flex-end; }
-    .res-item { display: flex; align-items: center; gap: 5px; font-size: 14px; font-weight: bold; background: #222; padding: 4px 8px; border-radius: 12px; border: 1px solid #333; }
-    .res-icon { width: 16px; height: 16px; background: #555; border-radius: 50%; display: inline-block; }
+    .res-item { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: bold; background: #222; padding: 4px 10px; border-radius: 12px; border: 1px solid #333; }
+    .res-icon { width: 20px; height: 20px; object-fit: contain; display: inline-block; }
     
     .content { padding: 20px; text-align: center; color: #666; }
   </style>
@@ -83,9 +83,9 @@
         </div>
       </div>
       <div class="resources">
-        <div class="res-item"><span class="res-icon" style="background:#9b59b6;"></span> <span id="ui-crystals">0</span></div>
-        <div class="res-item"><span class="res-icon" style="background:#f1c40f;"></span> <span id="ui-coins">0</span></div>
-        <div class="res-item"><span class="res-icon" style="background:#3498db;"></span> <span id="ui-mana">0</span></div>
+        <div class="res-item"><img src="/img/crystal.png" class="res-icon" alt="Crystals" onerror="this.style.display='none'"> <span id="ui-crystals">0</span></div>
+        <div class="res-item"><img src="/img/coin.png" class="res-icon" alt="Coins" onerror="this.style.display='none'"> <span id="ui-coins">0</span></div>
+        <div class="res-item"><img src="/img/mana.png" class="res-icon" alt="Mana" onerror="this.style.display='none'"> <span id="ui-mana">0</span></div>
       </div>
     </div>
     <div class="content">
