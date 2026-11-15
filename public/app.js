@@ -42,6 +42,8 @@ const loadScreen = document.getElementById('loading-screen');
 const regScreen = document.getElementById('register-screen');
 const mainScreen = document.getElementById('main-screen');
 const toastEl = document.getElementById('toast');
+const profileModal = document.getElementById('profile-modal');
+let currentProfile = null; // Храним профиль в памяти
 
 // Функция красивых уведомлений
 function showToast(message, isSuccess = false) {
@@ -106,6 +108,7 @@ function showRegister(tgUser) {
 
 function showMain(profile, tgUser) {
   mainScreen.style.display = 'flex';
+  currentProfile = profile;
   
   // Аватарка Telegram (если есть)
   if (tgUser.photo_url) {
@@ -124,6 +127,45 @@ function showMain(profile, tgUser) {
   document.getElementById('ui-crystals').textContent = profile.crystals;
   document.getElementById('ui-coins').textContent = profile.coins;
   document.getElementById('ui-mana').textContent = profile.mana;
+
+  // Настройка модального окна
+  document.getElementById('open-profile-btn').addEventListener('click', () => {
+    document.getElementById('edit-nickname-input').value = currentProfile.nickname;
+    profileModal.style.display = 'flex';
+  });
+
+  document.getElementById('close-profile').addEventListener('click', () => {
+    profileModal.style.display = 'none';
+  });
+
+  document.getElementById('btn-save-nickname').addEventListener('click', async () => {
+    const newNick = document.getElementById('edit-nickname-input').value.trim();
+    if (!newNick) return showToast('Никнейм не может быть пустым');
+    
+    try {
+      const res = await apiFetch('/api/profile/nickname', {
+        method: 'PUT',
+        body: JSON.stringify({ nickname: newNick })
+      });
+      currentProfile = res.profile;
+      document.getElementById('ui-nickname').textContent = res.profile.nickname;
+      profileModal.style.display = 'none';
+      showToast('Никнейм изменен', true);
+    } catch (err) {
+      showToast('Ошибка: ' + err.message);
+    }
+  });
+
+  document.getElementById('btn-logout').addEventListener('click', async () => {
+    if (!confirm('Вы уверены? Весь ваш прогресс (карты, ресурсы, уровень) будет УДАЛЕН безвозвратно.')) return;
+    
+    try {
+      await apiFetch('/api/profile', { method: 'DELETE' });
+      location.reload(); // Перезагружаем страницу, чтобы показать экран регистрации
+    } catch (err) {
+      showToast('Ошибка выхода: ' + err.message);
+    }
+  });
 }
 
 init();

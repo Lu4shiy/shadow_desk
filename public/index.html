@@ -10,8 +10,8 @@
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-    body { font-family: 'Montserrat', sans-serif; background: #121212; color: #eee; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
-    h2, h3 { font-family: 'Cinzel', serif; letter-spacing: 1px; }
+    body { font-family: 'Montserrat', sans-serif; background: #121212; color: #eee; height: 100vh; overflow: hidden; display: flex; flex-direction: column; font-weight: 600; }
+    h2, h3 { font-family: 'Montserrat', sans-serif; font-weight: 700; letter-spacing: 0.5px; }
     
     /* Экран загрузки */
     #loading-screen { position: fixed; inset: 0; background: #121212; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 999; transition: opacity 0.5s ease; }
@@ -52,7 +52,8 @@
     /* Главный экран */
     #main-screen { display: none; flex-direction: column; height: 100%; }
     .header { display: flex; justify-content: space-between; padding: 15px; background: #1a1a1a; border-bottom: 1px solid #333; }
-    .profile-info { display: flex; gap: 10px; align-items: center; }
+    .profile-info { display: flex; gap: 10px; align-items: center; cursor: pointer; transition: opacity 0.2s; }
+    .profile-info:active { opacity: 0.7; }
     .avatar { width: 50px; height: 50px; border-radius: 50%; background: #333; object-fit: cover; border: 2px solid #9b59b6; }
     .names h3 { font-size: 16px; margin-bottom: 2px; }
     .names p { font-size: 12px; color: #888; }
@@ -63,6 +64,25 @@
     .res-icon { width: 20px; height: 20px; object-fit: contain; display: inline-block; }
     
     .content { padding: 20px; text-align: center; color: #666; }
+
+    /* Модальное окно профиля */
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.8); backdrop-filter: blur(5px); display: none; justify-content: center; align-items: center; z-index: 2000; padding: 20px; }
+    .modal-content { background: #1e1e1e; border: 1px solid #333; border-radius: 16px; width: 100%; max-width: 400px; padding: 25px; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+    .modal-close { position: absolute; top: 15px; right: 15px; background: transparent; border: none; color: #888; font-size: 24px; cursor: pointer; width: auto; padding: 0; box-shadow: none; }
+    .modal-close:active { transform: none; color: #fff; }
+    
+    .modal-section { margin-bottom: 20px; }
+    .modal-section h4 { font-size: 14px; color: #aaa; margin-bottom: 10px; }
+    
+    .btn-secondary { background: #333; box-shadow: none; margin-bottom: 10px; font-weight: 600; }
+    .btn-secondary:active { background: #444; }
+    
+    .btn-danger { background: #e74c3c; box-shadow: 0 4px 15px rgba(231, 76, 60, 0.4); }
+    .btn-danger:active { background: #c0392b; }
+    
+    .nickname-edit { display: flex; gap: 10px; }
+    .nickname-edit input { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #444; background: #111; color: #fff; font-family: 'Montserrat', sans-serif; }
+    .nickname-edit button { width: auto; padding: 12px 20px; }
   </style>
 </head>
 <body>
@@ -90,7 +110,7 @@
 
   <div id="main-screen">
     <div class="header">
-      <div class="profile-info">
+      <div class="profile-info" id="open-profile-btn">
         <img id="ui-avatar" class="avatar" src="" alt="Avatar">
         <div class="names">
           <h3 id="ui-nickname">Никнейм</h3>
@@ -107,6 +127,36 @@
     <div class="content">
       <h2>Добро пожаловать в Shadow Deck!</h2>
       <p style="margin-top: 10px;">Здесь скоро появится игровое поле.</p>
+    </div>
+  </div>
+
+  <!-- Модальное окно профиля -->
+  <div id="profile-modal" class="modal-overlay">
+    <div class="modal-content">
+      <button class="modal-close" id="close-profile">&times;</button>
+      <h3 style="text-align:center; margin-bottom: 20px;">Профиль</h3>
+      
+      <div class="modal-section">
+        <h4>Значок</h4>
+        <button class="btn-secondary" onclick="showToast('Значки появятся в будущих обновлениях!')">Выбрать значок</button>
+      </div>
+
+      <div class="modal-section">
+        <h4>Смена аватарки</h4>
+        <button class="btn-secondary" onclick="showToast('Смена аватарки появится позже!')">Изменить фото</button>
+      </div>
+
+      <div class="modal-section">
+        <h4>Смена никнейма</h4>
+        <div class="nickname-edit">
+          <input type="text" id="edit-nickname-input" maxlength="15" placeholder="Новый ник..." />
+          <button id="btn-save-nickname">ОК</button>
+        </div>
+      </div>
+
+      <div class="modal-section" style="margin-top: 30px; border-top: 1px solid #333; padding-top: 20px;">
+        <button id="btn-logout" class="btn-danger">Сбросить аккаунт (Выход)</button>
+      </div>
     </div>
   </div>
 

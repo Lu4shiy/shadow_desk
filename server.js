@@ -34,7 +34,8 @@ pool.query(`
     xp INTEGER DEFAULT 0,
     crystals INTEGER DEFAULT 0,
     coins INTEGER DEFAULT 100,
-    mana INTEGER DEFAULT 50
+    mana INTEGER DEFAULT 50,
+    badge VARCHAR(50) DEFAULT NULL
   )
 `).catch(err => console.error('DB Init Error:', err));
 
@@ -73,6 +74,33 @@ app.get('/api/me', telegramAuth, async (req, res) => {
       return res.json({ registered: false, tgUser: req.telegramUser });
     }
     res.json({ registered: true, profile: result.rows[0], tgUser: req.telegramUser });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Обновление профиля (никнейм)
+app.put('/api/profile/nickname', telegramAuth, async (req, res) => {
+  const { nickname } = req.body;
+  if (!nickname || nickname.trim().length === 0) {
+    return res.status(400).json({ error: 'Никнейм не может быть пустым' });
+  }
+  try {
+    const result = await pool.query(
+      'UPDATE players SET nickname = $1 WHERE telegram_id = $2 RETURNING *',
+      [nickname.trim(), req.telegramUser.id]
+    );
+    res.json({ success: true, profile: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Сброс аккаунта (Выход)
+app.delete('/api/profile', telegramAuth, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM players WHERE telegram_id = $1', [req.telegramUser.id]);
+    res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
