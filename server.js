@@ -82,6 +82,12 @@ app.get('/api/me', telegramAuth, async (req, res) => {
 app.post('/api/register', telegramAuth, async (req, res) => {
   const { nickname, age, tutorialDone } = req.body;
   try {
+    // Сначала проверяем, есть ли уже такой игрок (защита от двойного клика)
+    const checkUser = await pool.query('SELECT * FROM players WHERE telegram_id = $1', [req.telegramUser.id]);
+    if (checkUser.rows.length > 0) {
+      return res.json({ success: true, profile: checkUser.rows[0] });
+    }
+
     const result = await pool.query(
       'INSERT INTO players (telegram_id, nickname, age, tutorial_done) VALUES ($1, $2, $3, $4) RETURNING *',
       [req.telegramUser.id, nickname, age, tutorialDone]

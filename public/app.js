@@ -41,6 +41,14 @@ async function apiFetch(path, options = {}) {
 const loadScreen = document.getElementById('loading-screen');
 const regScreen = document.getElementById('register-screen');
 const mainScreen = document.getElementById('main-screen');
+const toastEl = document.getElementById('toast');
+
+// Функция красивых уведомлений
+function showToast(message, isSuccess = false) {
+  toastEl.textContent = message;
+  toastEl.className = isSuccess ? 'success show' : 'show';
+  setTimeout(() => { toastEl.className = ''; }, 3000);
+}
 
 async function init() {
   try {
@@ -66,13 +74,18 @@ async function init() {
 
 function showRegister(tgUser) {
   regScreen.style.display = 'flex';
+  const btn = document.getElementById('btn-register');
   
-  document.getElementById('btn-register').addEventListener('click', async () => {
+  btn.addEventListener('click', async () => {
     const nick = document.getElementById('reg-nickname').value.trim();
     const age = parseInt(document.getElementById('reg-age').value);
     const tut = document.getElementById('reg-tutorial').checked;
 
-    if (!nick || !age) return alert('Заполните все поля!');
+    if (!nick) return showToast('Введите никнейм!');
+    if (!age || age < 10) return showToast('Введите корректный возраст (от 10 лет)!');
+
+    btn.disabled = true;
+    btn.textContent = 'Создание...';
 
     try {
       const res = await apiFetch('/api/register', {
@@ -81,9 +94,12 @@ function showRegister(tgUser) {
       });
       
       regScreen.style.display = 'none';
+      showToast('Аккаунт успешно создан!', true);
       showMain(res.profile, tgUser);
     } catch (err) {
-      alert('Ошибка регистрации: ' + err.message);
+      showToast('Ошибка: ' + err.message);
+      btn.disabled = false;
+      btn.textContent = 'Создать аккаунт';
     }
   });
 }
