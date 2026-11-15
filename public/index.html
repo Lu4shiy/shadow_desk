@@ -4,10 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Shadow Deck</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700&family=Montserrat:wght@400;600&display=swap" rel="stylesheet">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #121212; color: #eee; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+    body { font-family: 'Montserrat', sans-serif; background: #121212; color: #eee; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+    h2, h3 { font-family: 'Cinzel', serif; letter-spacing: 1px; }
     
     /* Экран загрузки */
     #loading-screen { position: fixed; inset: 0; background: #121212; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 999; transition: opacity 0.5s ease; }
@@ -23,13 +27,25 @@
     #register-screen { display: none; padding: 25px; flex-direction: column; justify-content: center; height: 100%; background: radial-gradient(circle at top, #2a1b38 0%, #121212 60%); }
     .input-group { margin-bottom: 18px; }
     .input-group label { display: block; margin-bottom: 8px; color: #bbb; font-size: 14px; margin-left: 4px; }
-    .input-group input { width: 100%; padding: 14px; border-radius: 12px; border: 1px solid #444; background: rgba(30, 30, 30, 0.8); color: #fff; font-size: 16px; outline: none; transition: all 0.2s; }
+    .input-group input { width: 100%; padding: 14px; border-radius: 12px; border: 1px solid #444; background: rgba(30, 30, 30, 0.8); color: #fff; font-size: 16px; outline: none; transition: all 0.2s; font-family: 'Montserrat', sans-serif; }
     .input-group input:focus { border-color: #9b59b6; box-shadow: 0 0 10px rgba(155, 89, 182, 0.2); }
-    .checkbox-group { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 25px; color: #aaa; font-size: 14px; line-height: 1.4; }
-    .checkbox-group input { margin-top: 3px; accent-color: #9b59b6; width: 18px; height: 18px; }
+    
+    /* Убираем системные стрелочки у поля ввода возраста */
+    input[type=number]::-webkit-inner-spin-button, 
+    input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type=number] { -moz-appearance: textfield; }
+
+    /* Кастомный чекбокс */
+    .checkbox-group { margin-bottom: 25px; position: relative; }
+    .checkbox-group input[type="checkbox"] { display: none; }
+    .checkbox-group label { display: flex; align-items: flex-start; gap: 12px; color: #aaa; font-size: 14px; line-height: 1.4; cursor: pointer; user-select: none; }
+    .checkbox-group label::before { content: ''; flex-shrink: 0; display: inline-block; width: 20px; height: 20px; border: 2px solid #71368a; border-radius: 6px; background: #1e1e1e; transition: all 0.2s; margin-top: 2px; }
+    .checkbox-group input:checked + label::before { background: #9b59b6; box-shadow: 0 0 10px rgba(155, 89, 182, 0.6); border-color: #9b59b6; }
+    .checkbox-group label::after { content: '✔'; position: absolute; left: 5px; top: 4px; color: white; font-size: 13px; opacity: 0; transition: opacity 0.2s; pointer-events: none; }
+    .checkbox-group input:checked + label::after { opacity: 1; }
     
     /* Кнопки */
-    button { padding: 16px; border: none; border-radius: 12px; background: linear-gradient(135deg, #9b59b6, #71368a); color: white; font-size: 16px; font-weight: bold; cursor: pointer; width: 100%; box-shadow: 0 4px 15px rgba(155, 89, 182, 0.4); transition: transform 0.1s, box-shadow 0.1s; letter-spacing: 0.5px; }
+    button { padding: 16px; border: none; border-radius: 12px; background: linear-gradient(135deg, #9b59b6, #71368a); color: white; font-size: 16px; font-family: 'Montserrat', sans-serif; font-weight: 600; cursor: pointer; width: 100%; box-shadow: 0 4px 15px rgba(155, 89, 182, 0.4); transition: transform 0.1s, box-shadow 0.1s; letter-spacing: 0.5px; }
     button:active { transform: scale(0.97); box-shadow: 0 2px 10px rgba(155, 89, 182, 0.3); }
     button:disabled { opacity: 0.7; pointer-events: none; }
 
@@ -56,20 +72,20 @@
   </div>
 
   <div id="register-screen">
-    <h2 style="text-align: center; margin-bottom: 20px;">Регистрация</h2>
+    <h2 style="text-align: center; margin-bottom: 25px; font-size: 24px;">Создание профиля</h2>
     <div class="input-group">
       <label>Никнейм</label>
-      <input type="text" id="reg-nickname" maxlength="15" placeholder="Ваш ник..." />
+      <input type="text" id="reg-nickname" maxlength="15" placeholder="Ваш ник..." autocomplete="off" />
     </div>
     <div class="input-group">
       <label>Возраст</label>
-      <input type="number" id="reg-age" min="10" max="100" placeholder="Ваш возраст..." />
+      <input type="number" id="reg-age" min="10" max="100" placeholder="Ваш возраст..." inputmode="numeric" />
     </div>
     <div class="checkbox-group">
       <input type="checkbox" id="reg-tutorial" />
-      <label for="reg-tutorial">Играли ли вы раньше в подобные игры? (Отключит обучение)</label>
+      <label for="reg-tutorial">Я уже играл в подобные игры (Отключит обучение)</label>
     </div>
-    <button id="btn-register">Создать аккаунт</button>
+    <button id="btn-register">Начать игру</button>
   </div>
 
   <div id="main-screen">
