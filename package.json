@@ -1,0 +1,16 @@
+{
+  "name": "tg-card-game",
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "@tma.js/init-data": "^4.0.0",
+    "express": "^4.21.0"
+  }
+}
