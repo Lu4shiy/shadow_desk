@@ -269,27 +269,25 @@ async function renderInventory() {
       return;
     }
 
-    container.innerHTML = cards.map(card => `
-      <div class="game-card" style="background-image: url('/img/card_template_${card.rarity}.png');">
-        <!-- Верхняя панель -->
-        <div class="card-level">${card.level}</div>
-        <div class="card-energy">${card.energy}</div>
-        <div class="card-type">${card.type}</div>
-        
-        <div class="card-stats">
-          <div class="stat-item">${card.atk > 0 ? card.atk : '-'}</div>
-          <div class="stat-item">${card.armor > 0 ? card.armor : '-'}</div>
-          <div class="stat-item">${card.hp > 0 ? card.hp : '-'}</div>
+    container.innerHTML = cards.map(card => {
+      // Если у карты есть картинка в БД (clown.png или clown.jpg), показываем её
+      if (card.image_url) {
+        return `
+          <div class="game-card">
+            <img src="/img/cards/${card.image_url}" alt="${card.name}" />
+          </div>
+        `;
+      } 
+      
+      // Заглушка для карт, у которых пока нет сгенерированного арта
+      return `
+        <div class="game-card" style="background-image: url('/img/card_template_${card.rarity}.png'); background-size: 100% 100%; display: flex; justify-content: center; align-items: center;">
+          <div style="background: rgba(0,0,0,0.7); padding: 10px; border-radius: 8px; color: #fff; text-align: center; font-size: 12px;">
+            ${card.name}<br><span style="font-size: 10px; color: #aaa;">Нет арта</span>
+          </div>
         </div>
-
-        <!-- Окно для будущей картинки персонажа -->
-        <div class="card-art"></div>
-
-        <!-- Нижняя панель -->
-        <div class="card-name">${card.name}</div>
-        <div class="card-desc">${card.description}</div>
-      </div>
-    `).join('');
+      `;
+    }).join('');
   } catch (err) {
     container.innerHTML = `<div style="color:red; grid-column: 1 / -1;">Ошибка загрузки: ${err.message}</div>`;
   }
