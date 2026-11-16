@@ -271,14 +271,22 @@ async function renderInventory() {
 
     container.innerHTML = cards.map(card => `
       <div class="game-card" style="background-image: url('/img/card_template_${card.rarity}.png');">
+        <!-- Верхняя панель -->
         <div class="card-level">${card.level}</div>
         <div class="card-energy">${card.energy}</div>
-        <div class="card-name">${card.name}</div>
+        <div class="card-type">${card.type}</div>
+        
         <div class="card-stats">
           <div class="stat-item">${card.atk > 0 ? card.atk : '-'}</div>
           <div class="stat-item">${card.armor > 0 ? card.armor : '-'}</div>
           <div class="stat-item">${card.hp > 0 ? card.hp : '-'}</div>
         </div>
+
+        <!-- Окно для будущей картинки персонажа -->
+        <div class="card-art"></div>
+
+        <!-- Нижняя панель -->
+        <div class="card-name">${card.name}</div>
         <div class="card-desc">${card.description}</div>
       </div>
     `).join('');

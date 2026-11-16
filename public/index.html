@@ -6,7 +6,7 @@
   <title>Shadow Deck</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&family=Cinzel:wght@600;700&display=swap" rel="stylesheet">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -74,25 +74,30 @@
     /* Если картинки-шаблона еще нет, чтобы не было пустоты */
     .game-card.no-img { background: #222; border: 2px solid #555; }
 
-    /* Текст поверх карточки */
+    /* Текст поверх карточки (используем шрифт Cinzel) */
+    .card-text-base { font-family: 'Cinzel', serif; font-weight: 700; }
+
     /* Уровень (в шестиугольнике) */
-    .card-level { position: absolute; top: 4%; left: 3.5%; width: 10%; height: 8%; display: flex; justify-content: center; align-items: center; font-size: 14px; font-weight: bold; color: white; text-shadow: 1px 1px 3px black; }
+    .card-level { position: absolute; top: 4%; left: 3.5%; width: 11%; height: 8.5%; display: flex; justify-content: center; align-items: center; font-size: 14px; color: #e0e0e0; text-shadow: 1px 1px 2px black; font-family: 'Montserrat', sans-serif;}
     
-    /* Энергия (в кружке рядом с шестиугольником) */
-    .card-energy { position: absolute; top: 4.5%; left: 16.5%; width: 8%; height: 7%; display: flex; justify-content: center; align-items: center; font-size: 14px; font-weight: bold; color: white; text-shadow: 1px 1px 3px black; }
+    /* Энергия */
+    .card-energy { position: absolute; top: 4%; left: 18%; width: 9%; height: 8.5%; display: flex; justify-content: center; align-items: center; font-size: 14px; color: #e0e0e0; text-shadow: 1px 1px 2px black; font-family: 'Montserrat', sans-serif;}
     
-    /* Название (по центру в темной плашке) */
-    .card-name { position: absolute; top: 4.5%; left: 27%; width: 38%; height: 7%; display: flex; justify-content: center; align-items: center; font-size: 9px; font-weight: bold; color: #eee; text-align: center; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-transform: uppercase; letter-spacing: 0.5px; }
+    /* Тип карты (верхняя плашка) */
+    .card-type { position: absolute; top: 4.5%; left: 29%; width: 40%; height: 7.5%; display: flex; justify-content: center; align-items: center; font-size: 11px; color: #b0b0b0; text-transform: uppercase; letter-spacing: 1px; font-family: 'Cinzel', serif; overflow: hidden; white-space: nowrap; }
     
     /* Статы (в трех кружках справа) */
-    .card-stats { position: absolute; top: 4.5%; right: 3.5%; width: 27%; display: flex; justify-content: space-around; align-items: center; font-size: 12px; font-weight: bold; color: white; text-shadow: 1px 1px 3px black; }
-    .stat-item { display: flex; justify-content: center; align-items: center; }
+    .card-stats { position: absolute; top: 4%; right: 3%; width: 26%; display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: #e0e0e0; text-shadow: 1px 1px 2px black; font-family: 'Montserrat', sans-serif;}
+    .stat-item { display: flex; justify-content: center; align-items: center; flex: 1; }
     
-    /* Описание (снизу) */
-    .card-desc { position: absolute; bottom: 2.5%; left: 5%; width: 90%; height: 20%; font-size: 9px; color: #111; text-align: center; overflow: hidden; display: flex; align-items: center; justify-content: center; padding: 4px; line-height: 1.2; font-weight: 700; }
+    /* Название (нижняя тонкая плашка) */
+    .card-name { position: absolute; bottom: 26.5%; left: 8%; width: 84%; height: 8%; display: flex; justify-content: center; align-items: center; font-size: 13px; color: #2a1b10; text-align: center; overflow: hidden; white-space: nowrap; text-transform: uppercase; font-family: 'Cinzel', serif; letter-spacing: 0.5px; }
+    
+    /* Описание (нижняя толстая плашка) */
+    .card-desc { position: absolute; bottom: 3.5%; left: 8%; width: 84%; height: 20%; font-size: 10px; color: #2a1b10; text-align: center; overflow: hidden; display: flex; align-items: center; justify-content: center; padding: 4px; line-height: 1.2; font-weight: 600; font-family: 'Montserrat', sans-serif;}
 
     /* Окно для арта (персонажа или картинки) */
-    .card-art { position: absolute; top: 13%; left: 6%; width: 88%; height: 52%; background-size: cover; background-position: center; border-radius: 4px; }
+    .card-art { position: absolute; top: 14.5%; left: 5.5%; width: 89%; height: 54%; background-size: cover; background-position: center; border-radius: 2px; }
 
     .modal-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.8); backdrop-filter: blur(5px); display: none; justify-content: center; align-items: center; z-index: 2000; padding: 20px; }
     .modal-content { background: #1e1e1e; border: 1px solid #333; border-radius: 16px; width: 100%; max-width: 400px; padding: 25px; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,0.5); max-height: 90vh; overflow-y: auto; }
