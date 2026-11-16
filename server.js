@@ -149,6 +149,40 @@ app.put('/api/profile/avatar', telegramAuth, playerAuth, async (req, res) => {
   }
 });
 
+// Получить инвентарь игрока
+app.get('/api/inventory', telegramAuth, playerAuth, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT inv.id as inv_id, inv.level, c.* 
+      FROM player_inventory inv
+      JOIN cards c ON inv.card_id = c.id
+      WHERE inv.player_id = $1
+      ORDER BY inv.id DESC
+    `, [req.player.id]);
+    res.json({ success: true, cards: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Открыть бесплатный кейс (для теста)
+app.post('/api/shop/open', telegramAuth, playerAuth, async (req, res) => {
+  try {
+    // Выбираем случайную карту (пока просто случайную из всех)
+    const cardResult = await pool.query('SELECT id FROM cards ORDER BY RANDOM() LIMIT 1');
+    if (cardResult.rows.length === 0) return res.status(500).json({ error: 'База карт пуста' });
+    
+    const cardId = cardResult.rows[0].id;
+    
+    // Добавляем в инвентарь
+    await pool.query('INSERT INTO player_inventory (player_id, card_id) VALUES ($1, $2)', [req.player.id, cardId]);
+    
+    res.json({ success: true, message: 'Карта добавлена в инвентарь!' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 
 app.listen(PORT, () => {

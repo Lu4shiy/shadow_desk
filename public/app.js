@@ -44,8 +44,15 @@ let isRegisterMode = true;
 
 function showToast(message, isSuccess = false) {
   toastEl.textContent = message;
-  toastEl.className = isSuccess ? 'success show' : 'show';
-  setTimeout(() => { toastEl.className = ''; }, 3000);
+  toastEl.classList.remove('success'); // Сбрасываем предыдущий статус
+  if (isSuccess) toastEl.classList.add('success');
+  toastEl.classList.add('show');
+  
+  setTimeout(() => { 
+    toastEl.classList.remove('show'); 
+    // Убираем success только после того, как плашка уехала вниз, чтобы не было мигания цвета
+    setTimeout(() => toastEl.classList.remove('success'), 300);
+  }, 3000);
 }
 
 async function init() {
@@ -216,9 +223,67 @@ function showMain(profile) {
       location.reload();
     };
 
+    // Логика переключения вкладок
+    const navBtns = document.querySelectorAll('.nav-btn');
+    const contents = document.querySelectorAll('.content');
+    
+    navBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        navBtns.forEach(b => b.classList.remove('active'));
+        contents.forEach(c => c.classList.remove('active'));
+        
+        btn.classList.add('active');
+        const targetId = btn.getAttribute('data-tab');
+        document.getElementById(targetId).classList.add('active');
+      });
+    });
+
+    // Отрисовка карточек и привязка кнопки магазина
+    renderInventory();
+    
+    document.getElementById('btn-open-case').onclick = async () => {
+      try {
+        const res = await apiFetch('/api/shop/open', { method: 'POST' });
+        showToast(res.message, true);
+        renderInventory(); // Обновляем инвентарь после выдачи
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
   } catch (err) {
     console.error(err);
     showToast('Ошибка отрисовки профиля: ' + err.message);
+  }
+}
+
+async function renderInventory() {
+  const container = document.getElementById('inventory-container');
+  
+  try {
+    const data = await apiFetch('/api/inventory');
+    const cards = data.cards;
+
+    if (cards.length === 0) {
+      container.innerHTML = `<div style="grid-column: 1 / -1; text-align: center; padding: 40px; color: #555; border: 2px dashed #333; border-radius: 12px;">У вас пока нет карт.<br>Загляните в магазин!</div>`;
+      return;
+    }
+
+    container.innerHTML = cards.map(card => `
+      <div class="game-card" style="background-image: url('/img/card_template_${card.rarity}.png');">
+        <div class="card-level">${card.level}</div>
+        <div class="card-energy">${card.energy}</div>
+        <div class="card-name">${card.name}</div>
+        <div class="card-stats">
+          <div class="stat-item">${card.atk > 0 ? card.atk : '-'}</div>
+          <div class="stat-item">${card.armor > 0 ? card.armor : '-'}</div>
+          <div class="stat-item">${card.hp > 0 ? card.hp : '-'}</div>
+        </div>
+        <div class="card-desc">${card.description}</div>
+      </div>
+    `).join('');
+  } catch (err) {
+    container.innerHTML = `<div style="color:red; grid-column: 1 / -1;">Ошибка загрузки: ${err.message}</div>`;
   }
 }
 
