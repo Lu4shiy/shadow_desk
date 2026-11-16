@@ -76,20 +76,23 @@
 
     /* Текст поверх карточки */
     /* Уровень (в шестиугольнике) */
-    .card-level { position: absolute; top: 3%; left: 3.5%; width: 10%; height: 8%; display: flex; justify-content: center; align-items: center; font-size: 16px; font-weight: bold; color: white; text-shadow: 1px 1px 3px black; }
+    .card-level { position: absolute; top: 4%; left: 3.5%; width: 10%; height: 8%; display: flex; justify-content: center; align-items: center; font-size: 14px; font-weight: bold; color: white; text-shadow: 1px 1px 3px black; }
     
-    /* Энергия (во втором кружке слева) */
-    .card-energy { position: absolute; top: 3.5%; left: 18%; width: 8%; height: 7%; display: flex; justify-content: center; align-items: center; font-size: 15px; font-weight: bold; color: white; text-shadow: 1px 1px 3px black; }
+    /* Энергия (в кружке рядом с шестиугольником) */
+    .card-energy { position: absolute; top: 4.5%; left: 16.5%; width: 8%; height: 7%; display: flex; justify-content: center; align-items: center; font-size: 14px; font-weight: bold; color: white; text-shadow: 1px 1px 3px black; }
     
-    /* Название (по центру в плашке) */
-    .card-name { position: absolute; top: 3.5%; left: 28%; width: 38%; height: 7%; display: flex; justify-content: center; align-items: center; font-size: 10px; font-weight: bold; color: #eee; text-align: center; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-transform: uppercase; letter-spacing: 0.5px; }
+    /* Название (по центру в темной плашке) */
+    .card-name { position: absolute; top: 4.5%; left: 27%; width: 38%; height: 7%; display: flex; justify-content: center; align-items: center; font-size: 9px; font-weight: bold; color: #eee; text-align: center; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-transform: uppercase; letter-spacing: 0.5px; }
     
     /* Статы (в трех кружках справа) */
-    .card-stats { position: absolute; top: 3.5%; right: 4.5%; width: 24%; display: flex; justify-content: space-between; align-items: center; font-size: 14px; font-weight: bold; color: white; text-shadow: 1px 1px 3px black; }
-    .stat-item { display: flex; justify-content: center; align-items: center; flex: 1; }
+    .card-stats { position: absolute; top: 4.5%; right: 3.5%; width: 27%; display: flex; justify-content: space-around; align-items: center; font-size: 12px; font-weight: bold; color: white; text-shadow: 1px 1px 3px black; }
+    .stat-item { display: flex; justify-content: center; align-items: center; }
     
     /* Описание (снизу) */
-    .card-desc { position: absolute; bottom: 3%; left: 5%; width: 90%; height: 20%; font-size: 9px; color: #222; text-align: center; overflow: hidden; display: flex; align-items: center; justify-content: center; padding: 2px; line-height: 1.1; }
+    .card-desc { position: absolute; bottom: 2.5%; left: 5%; width: 90%; height: 20%; font-size: 9px; color: #111; text-align: center; overflow: hidden; display: flex; align-items: center; justify-content: center; padding: 4px; line-height: 1.2; font-weight: 700; }
+
+    /* Окно для арта (персонажа или картинки) */
+    .card-art { position: absolute; top: 13%; left: 6%; width: 88%; height: 52%; background-size: cover; background-position: center; border-radius: 4px; }
 
     .modal-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.8); backdrop-filter: blur(5px); display: none; justify-content: center; align-items: center; z-index: 2000; padding: 20px; }
     .modal-content { background: #1e1e1e; border: 1px solid #333; border-radius: 16px; width: 100%; max-width: 400px; padding: 25px; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,0.5); max-height: 90vh; overflow-y: auto; }
