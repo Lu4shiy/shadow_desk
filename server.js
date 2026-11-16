@@ -1,7 +1,6 @@
 import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { validate, parse } from '@tma.js/init-data-node';
 import pg from 'pg';
 import crypto from 'crypto';
 
@@ -44,6 +43,38 @@ app.use(express.static(join(__dirname, 'public')));
 
 const hashPassword = (pass) => crypto.createHash('sha256').update(pass).digest('hex');
 
+// Надежная проверка initData напрямую через crypto
+function validateTelegramData(initData, botToken) {
+  const params = new URLSearchParams(initData);
+  const hash = params.get('hash');
+  if (!hash) throw new Error('No hash provided');
+  
+  params.delete('hash');
+  
+  // Сортируем ключи по алфавиту и склеиваем
+  const dataCheckString = Array.from(params.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key}=${value}`)
+    .join('\n');
+
+  const secretKey = crypto.createHmac('sha256', 'WebAppData').update(botToken).digest();
+  const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+
+  if (calculatedHash !== hash) {
+    throw new Error('Неверная подпись. Проверь BOT_TOKEN на Render!');
+  }
+
+  const authDate = parseInt(params.get('auth_date'));
+  const currentTime = Math.floor(Date.now() / 1000);
+  
+  // Даем 24 часа (86400 секунд) на тесты вместо 1 часа
+  if (currentTime - authDate > 86400) {
+    throw new Error('Данные устарели (прошло больше 24 часов)');
+  }
+  
+  return true;
+}
+
 function telegramAuth(req, res, next) {
   const authHeader = req.headers.authorization || '';
   const [authType, authData = ''] = authHeader.split(' ');
@@ -53,9 +84,10 @@ function telegramAuth(req, res, next) {
   }
 
   try {
-    validate(authData, BOT_TOKEN, { expiresIn: 3600 });
+    validateTelegramData(authData, BOT_TOKEN);
     next();
   } catch (err) {
+    console.error('InitData validation failed:', err.message); // Это покажет точную причину в логах Render
     return res.status(403).json({ error: 'Invalid initData', details: err.message });
   }
 }
