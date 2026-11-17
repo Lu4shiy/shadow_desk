@@ -197,6 +197,47 @@ app.get('/api/inventory', telegramAuth, playerAuth, async (req, res) => {
   }
 });
 
+// Добавить/убрать карту из колоды
+app.post('/api/deck/toggle', telegramAuth, playerAuth, async (req, res) => {
+  const { inv_id } = req.body;
+  try {
+    // 1. Получаем текущий статус карты
+    const cardRes = await pool.query('SELECT * FROM player_inventory WHERE id = $1 AND player_id = $2', [inv_id, req.player.id]);
+    if (cardRes.rows.length === 0) return res.status(404).json({ error: 'Карта не найдена' });
+    
+    const currentCard = cardRes.rows[0];
+    const newStatus = !currentCard.in_deck;
+
+    // 2. Если мы добавляем карту, проверяем лимиты (макс 12 карт, макс 6 персонажей)
+    if (newStatus) {
+      const deckRes = await pool.query(`
+        SELECT count(*) as total, 
+               sum(case when c.type = 'Персонаж' then 1 else 0 end) as characters
+        FROM player_inventory inv
+        JOIN cards c ON inv.card_id = c.id
+        WHERE inv.player_id = $1 AND inv.in_deck = TRUE
+      `, [req.player.id]);
+      
+      const total = parseInt(deckRes.rows[0].total);
+      const characters = parseInt(deckRes.rows[0].characters) || 0;
+
+      if (total >= 12) return res.status(400).json({ error: 'В колоде уже 12 карт!' });
+      
+      // Получаем тип добавляемой карты
+      const typeRes = await pool.query('SELECT type FROM cards WHERE id = $1', [currentCard.card_id]);
+      if (typeRes.rows[0].type === 'Персонаж' && characters >= 6) {
+        return res.status(400).json({ error: 'В колоде уже максимум 6 персонажей!' });
+      }
+    }
+
+    // 3. Переключаем статус
+    await pool.query('UPDATE player_inventory SET in_deck = $1 WHERE id = $2', [newStatus, inv_id]);
+    res.json({ success: true, in_deck: newStatus });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Открыть бесплатный кейс (для теста)
 app.post('/api/shop/open', telegramAuth, playerAuth, async (req, res) => {
   try {

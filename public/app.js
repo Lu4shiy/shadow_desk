@@ -269,27 +269,51 @@ async function renderInventory() {
       return;
     }
 
+    let deckCount = 0; // Считаем карты в колоде
+
     container.innerHTML = cards.map(card => {
-      // Если у карты есть картинка в БД (clown.png или clown.jpg), показываем её
-      if (card.image_url) {
-        return `
-          <div class="game-card">
-            <img src="/img/cards/${card.image_url}" alt="${card.name}" />
-          </div>
-        `;
-      } 
+      if (card.in_deck) deckCount++;
       
-      // Заглушка для карт, у которых пока нет сгенерированного арта
+      // Добавляем рамку, если карта в колоде
+      const inDeckStyle = card.in_deck ? 'border: 3px solid #2ecc71; box-shadow: 0 0 15px #2ecc71; transform: scale(0.95);' : '';
+      
+      let cardHtml = '';
+      if (card.image_url) {
+        cardHtml = `<img src="/img/cards/${card.image_url}" alt="${card.name}" />`;
+      } else {
+        cardHtml = `<div style="background-image: url('/img/card_template_${card.rarity}.png'); background-size: 100% 100%; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center;">
+            <div style="background: rgba(0,0,0,0.7); padding: 10px; border-radius: 8px; color: #fff; text-align: center; font-size: 12px;">
+              ${card.name}<br><span style="font-size: 10px; color: #aaa;">Нет арта</span>
+            </div>
+          </div>`;
+      }
+
+      // Возвращаем карточку с обработчиком клика
       return `
-        <div class="game-card" style="background-image: url('/img/card_template_${card.rarity}.png'); background-size: 100% 100%; display: flex; justify-content: center; align-items: center;">
-          <div style="background: rgba(0,0,0,0.7); padding: 10px; border-radius: 8px; color: #fff; text-align: center; font-size: 12px;">
-            ${card.name}<br><span style="font-size: 10px; color: #aaa;">Нет арта</span>
-          </div>
+        <div class="game-card" style="${inDeckStyle}" onclick="toggleDeckCard(${card.inv_id})">
+          ${cardHtml}
         </div>
       `;
     }).join('');
+
+    // Обновляем счетчик колоды в интерфейсе
+    document.getElementById('deck-counter').textContent = deckCount;
   } catch (err) {
     container.innerHTML = `<div style="color:red; grid-column: 1 / -1;">Ошибка загрузки: ${err.message}</div>`;
+  }
+}
+
+async function toggleDeckCard(invId) {
+  try {
+    const res = await apiFetch('/api/deck/toggle', {
+      method: 'POST',
+      body: JSON.stringify({ inv_id: invId })
+    });
+    
+    // Перерисовываем инвентарь, чтобы показать изменения
+    renderInventory();
+  } catch (err) {
+    showToast(err.message);
   }
 }
 
