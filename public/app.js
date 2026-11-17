@@ -244,8 +244,56 @@ function showMain(profile) {
     document.getElementById('btn-open-case').onclick = async () => {
       try {
         const res = await apiFetch('/api/shop/open', { method: 'POST' });
-        showToast(res.message, true);
-        renderInventory(); // Обновляем инвентарь после выдачи
+        
+        // Показываем модалку с паком
+        const packModal = document.getElementById('pack-modal');
+        const packImage = document.getElementById('pack-image');
+        const packResult = document.getElementById('pack-result');
+        const cardContainer = document.getElementById('pack-card-container');
+        
+        packImage.style.display = 'flex';
+        packImage.style.transform = 'translateX(0)';
+        packResult.style.display = 'none';
+        packModal.style.display = 'flex';
+
+        // Логика свайпа
+        let startX = 0;
+        const onTouchStart = (e) => startX = e.touches ? e.touches[0].clientX : e.clientX;
+        const onTouchEnd = (e) => {
+          const endX = e.changedTouches ? e.changedTouches[0].clientX : e.clientX;
+          if (endX - startX > 50) { // Свайп слева направо
+            packImage.removeEventListener('touchstart', onTouchStart);
+            packImage.removeEventListener('touchend', onTouchEnd);
+            packImage.removeEventListener('mousedown', onTouchStart);
+            packImage.removeEventListener('mouseup', onTouchEnd);
+            openPack(res.card);
+          }
+        };
+
+        packImage.addEventListener('touchstart', onTouchStart);
+        packImage.addEventListener('touchend', onTouchEnd);
+        packImage.addEventListener('mousedown', onTouchStart);
+        packImage.addEventListener('mouseup', onTouchEnd);
+
+        function openPack(card) {
+          packImage.style.display = 'none';
+          packResult.style.display = 'flex';
+          
+          // Рендерим карту в модалке
+          if (card.image_url) {
+             cardContainer.innerHTML = `<img src="/img/cards/${card.image_url}" class="card-reveal" style="width: 100%; border-radius: 12px;" />`;
+          } else {
+             cardContainer.innerHTML = `<div class="card-reveal" style="background-image: url('/img/card_template_${card.rarity}.png'); background-size: 100% 100%; aspect-ratio: 4/5; display: flex; justify-content: center; align-items: center; border-radius: 12px;"><div style="background: rgba(0,0,0,0.8); padding: 10px; border-radius: 8px; font-weight: bold;">${card.name}</div></div>`;
+          }
+          
+          // Обновляем инвентарь в фоне
+          loadInventory();
+        }
+
+        document.getElementById('btn-close-pack').onclick = () => {
+          packModal.style.display = 'none';
+        };
+
       } catch (err) {
         showToast(err.message);
       }
@@ -277,11 +325,9 @@ async function loadInventory() {
 }
 
 function updateInventoryUI() {
-  // 1. Обновляем счетчик колоды (считаем по всем картам)
   const deckCount = allInventoryCards.filter(c => c.in_deck).length;
   document.getElementById('deck-counter').textContent = deckCount;
 
-  // 2. Фильтрация
   const typeFilter = document.getElementById('filter-type').value;
   const rarityFilter = document.getElementById('filter-rarity').value;
   const sortBy = document.getElementById('sort-by').value;
@@ -293,19 +339,34 @@ function updateInventoryUI() {
     return true;
   });
 
-  // 3. Сортировка
   const typeWeight = { 'Персонаж': 1, 'Позитивная': 2, 'Негативная': 3, 'Атака': 4, 'Действие': 5 };
   const rarityWeight = { grey: 1, purple: 2, orange: 3, blue: 4, gold: 5 };
 
   filtered.sort((a, b) => {
-    if (sortBy === 'rarity-desc') return rarityWeight[b.rarity] - rarityWeight[a.rarity];
-    if (sortBy === 'rarity-asc') return rarityWeight[a.rarity] - rarityWeight[b.rarity];
-    if (sortBy === 'type-asc') return typeWeight[a.type] - typeWeight[b.type];
-    if (sortBy === 'type-desc') return typeWeight[b.type] - typeWeight[a.type];
+    let rarA = rarityWeight[a.rarity] || 0;
+    let rarB = rarityWeight[b.rarity] || 0;
+    let typeA = typeWeight[a.type] || 0;
+    let typeB = typeWeight[b.type] || 0;
+
+    if (sortBy === 'rarity-desc') {
+      if (rarB !== rarA) return rarB - rarA;
+      return typeA - typeB;
+    }
+    if (sortBy === 'rarity-asc') {
+      if (rarA !== rarB) return rarA - rarB;
+      return typeA - typeB;
+    }
+    if (sortBy === 'type-asc') {
+      if (typeA !== typeB) return typeA - typeB;
+      return rarB - rarA; // Внутри типа сначала лучшие
+    }
+    if (sortBy === 'type-desc') {
+      if (typeA !== typeB) return typeB - typeA;
+      return rarB - rarA; // Внутри типа сначала лучшие
+    }
     return 0;
   });
 
-  // 4. Отрисовка
   const container = document.getElementById('inventory-container');
   if (filtered.length === 0) {
     container.innerHTML = `<div style="grid-column: 1 / -1; text-align: center; padding: 40px; color: #555; border: 2px dashed #333; border-radius: 12px;">Здесь пусто.</div>`;
@@ -314,45 +375,42 @@ function updateInventoryUI() {
 
   container.innerHTML = filtered.map(card => {
     const inDeckStyle = card.in_deck ? 'border: 3px solid #2ecc71; box-shadow: 0 0 15px #2ecc71; transform: scale(0.95);' : '';
+    const newBadge = card.is_new ? '<div class="badge-new">NEW</div>' : '';
     
     let cardHtml = '';
     if (card.image_url) {
       cardHtml = `<img src="/img/cards/${card.image_url}" alt="${card.name}" />`;
     } else {
       cardHtml = `<div style="background-image: url('/img/card_template_${card.rarity}.png'); background-size: 100% 100%; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center;">
-          <div style="background: rgba(0,0,0,0.7); padding: 10px; border-radius: 8px; color: #fff; text-align: center; font-size: 12px;">
-            ${card.name}
-          </div>
+          <div style="background: rgba(0,0,0,0.7); padding: 10px; border-radius: 8px; color: #fff; text-align: center; font-size: 12px;">${card.name}</div>
         </div>`;
     }
 
     return `
       <div class="game-card" style="${inDeckStyle}" data-id="${card.inv_id}">
+        ${newBadge}
         ${cardHtml}
       </div>
     `;
   }).join('');
 
-  // 5. Привязка событий к карточкам
+  // ... (обработчики кликов остаются без изменений, они ниже в твоем файле)
   const cardElements = container.querySelectorAll('.game-card');
   cardElements.forEach(el => {
     const invId = el.getAttribute('data-id');
 
-    // Клик (открыть модалку)
     el.addEventListener('click', (e) => {
-      if (el.dataset.longPressed === 'true') return; // Игнорируем клик после долгого нажатия
+      if (el.dataset.longPressed === 'true') return;
       openCardModal(invId);
     });
 
-    // ПКМ / Долгое нажатие
     const startPress = (e) => {
       el.dataset.longPressed = 'false';
       longPressTimer = setTimeout(() => {
         el.dataset.longPressed = 'true';
         showContextMenu(e, invId);
-      }, 600); // 600мс для долгого нажатия
+      }, 600);
     };
-
     const cancelPress = () => clearTimeout(longPressTimer);
 
     el.addEventListener('mousedown', startPress);
@@ -412,6 +470,13 @@ function openCardModal(invId) {
   const card = allInventoryCards.find(c => c.inv_id == invId);
   if (!card) return;
 
+  // Если карта новая - помечаем прочитанной
+  if (card.is_new) {
+    card.is_new = false;
+    apiFetch('/api/inventory/read', { method: 'POST', body: JSON.stringify({ inv_id: invId }) }).catch(console.error);
+    // Перерисовывать сразу не будем, чтобы не мигало, перерисуем при закрытии
+  }
+
   document.getElementById('card-detail-name').textContent = card.name;
   document.getElementById('card-detail-rarity').textContent = rarityNames[card.rarity];
   document.getElementById('card-detail-rarity').style.color = rarityColors[card.rarity];
@@ -469,6 +534,13 @@ function showContextMenu(e, invId) {
   activeContextCard = allInventoryCards.find(c => c.inv_id == invId);
   if (!activeContextCard) return;
 
+  // Если карта новая - помечаем прочитанной
+  if (card.is_new) {
+    card.is_new = false;
+    apiFetch('/api/inventory/read', { method: 'POST', body: JSON.stringify({ inv_id: invId }) }).catch(console.error);
+    // Перерисовывать сразу не будем, чтобы не мигало, перерисуем при закрытии
+  }
+
   // Настраиваем текст кнопки
   if (activeContextCard.in_deck) {
     ctxToggleBtn.textContent = 'Убрать из колоды';
@@ -502,5 +574,17 @@ function showContextMenu(e, invId) {
 function hideContextMenu() {
   contextMenu.style.display = 'none';
 }
+
+// Привязка кнопки "Прочитать все"
+document.getElementById('btn-mark-all-read').addEventListener('click', async () => {
+  try {
+    await apiFetch('/api/inventory/read-all', { method: 'POST' });
+    allInventoryCards.forEach(c => c.is_new = false);
+    updateInventoryUI();
+    showToast('Все карты прочитаны', true);
+  } catch (err) {
+    showToast(err.message);
+  }
+});
 
 init();

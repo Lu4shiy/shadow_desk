@@ -118,6 +118,23 @@
 
     /* Контекстное меню */
     #context-menu button:active { background: #9b59b6; }
+
+    /* Карточка открывается сверху */
+    #card-detail-modal { align-items: flex-start; padding-top: 20px; }
+
+    /* Пометка NEW */
+    .badge-new { position: absolute; top: -5px; right: -5px; background: #e74c3c; color: white; font-size: 10px; font-weight: bold; padding: 2px 6px; border-radius: 10px; z-index: 10; box-shadow: 0 2px 5px rgba(0,0,0,0.5); border: 1px solid #fff; }
+
+    /* Пак */
+    #pack-modal { z-index: 3500; display: none; flex-direction: column; align-items: center; justify-content: center; }
+    .pack-image { width: 200px; height: 300px; background: linear-gradient(135deg, #2a1b38, #111); border: 4px solid #9b59b6; border-radius: 12px; display: flex; justify-content: center; align-items: center; color: #fff; font-family: 'Cinzel', serif; font-size: 20px; text-align: center; box-shadow: 0 0 30px rgba(155, 89, 182, 0.6); touch-action: none; user-select: none; transition: transform 0.2s; }
+    
+    /* Анимация карты */
+    @keyframes popCard {
+      0% { transform: scale(0.5) translateY(50px); opacity: 0; }
+      100% { transform: scale(1) translateY(0); opacity: 1; }
+    }
+    .card-reveal { animation: popCard 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
   </style>
 </head>
 <body>
@@ -208,6 +225,10 @@
           <option value="type-asc">Тип (Персонажи → Действия)</option>
           <option value="type-desc">Тип (Действия → Персонажи)</option>
         </select>
+      </div>
+
+      <div style="text-align: right; margin-bottom: 10px;">
+        <button id="btn-mark-all-read" style="width: auto; padding: 6px 12px; font-size: 11px; background: #333; box-shadow: none;">Прочитать все</button>
       </div>
       
       <div id="inventory-container" class="cards-grid">
@@ -323,5 +344,16 @@
 
   <div id="toast">Текст ошибки</div>
   <script src="app.js"></script>
+
+  <!-- Модальное окно открытия пака -->
+  <div id="pack-modal" class="modal-overlay">
+    <h2 style="margin-bottom: 20px; color: #f1c40f; font-family: 'Cinzel', serif;">Смахни, чтобы открыть</h2>
+    <div class="pack-image" id="pack-image">SHADOW DECK</div>
+    
+    <div id="pack-result" style="display: none; flex-direction: column; align-items: center;">
+      <div id="pack-card-container" style="width: 240px; margin-bottom: 20px;"></div>
+      <button id="btn-close-pack" style="width: 200px;">Закрыть</button>
+    </div>
+  </div>
 </body>
 </html>

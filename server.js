@@ -185,7 +185,7 @@ app.put('/api/profile/avatar', telegramAuth, playerAuth, async (req, res) => {
 app.get('/api/inventory', telegramAuth, playerAuth, async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT inv.id as inv_id, inv.level, c.* 
+      SELECT inv.id as inv_id, inv.level, inv.in_deck, inv.is_new, c.* 
       FROM player_inventory inv
       JOIN cards c ON inv.card_id = c.id
       WHERE inv.player_id = $1
@@ -238,19 +238,54 @@ app.post('/api/deck/toggle', telegramAuth, playerAuth, async (req, res) => {
   }
 });
 
-// Открыть бесплатный кейс (для теста)
+// Открыть бесплатный кейс
 app.post('/api/shop/open', telegramAuth, playerAuth, async (req, res) => {
   try {
-    // Выбираем случайную карту (пока просто случайную из всех)
-    const cardResult = await pool.query('SELECT id FROM cards ORDER BY RANDOM() LIMIT 1');
-    if (cardResult.rows.length === 0) return res.status(500).json({ error: 'База карт пуста' });
+    // 1. Определяем редкость по шансам
+    const roll = Math.random() * 100;
+    let rarity = 'grey'; // Частая (68.52%)
+    if (roll < 0.13) rarity = 'gold'; // Легендарная (0.13%)
+    else if (roll < 2.87) rarity = 'blue'; // Супер-редкая (2.74%)
+    else if (roll < 12.84) rarity = 'orange'; // Редкая (9.97%)
+    else if (roll < 31.48) rarity = 'purple'; // Обычная (18.64%)
+
+    // 2. Выбираем случайную карту этой редкости
+    let cardResult = await pool.query('SELECT * FROM cards WHERE rarity = $1 ORDER BY RANDOM() LIMIT 1', [rarity]);
     
-    const cardId = cardResult.rows[0].id;
+    // Если карт такой редкости нет в базе, берем любую
+    if (cardResult.rows.length === 0) {
+      cardResult = await pool.query('SELECT * FROM cards ORDER BY RANDOM() LIMIT 1');
+    }
     
-    // Добавляем в инвентарь
-    await pool.query('INSERT INTO player_inventory (player_id, card_id) VALUES ($1, $2)', [req.player.id, cardId]);
+    const card = cardResult.rows[0];
+    if (!card) return res.status(500).json({ error: 'База карт пуста' });
     
-    res.json({ success: true, message: 'Карта добавлена в инвентарь!' });
+    // 3. Добавляем в инвентарь
+    await pool.query('INSERT INTO player_inventory (player_id, card_id) VALUES ($1, $2)', [req.player.id, card.id]);
+    
+    // 4. Возвращаем данные карты для анимации
+    res.json({ success: true, card: card });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Пометить карту как прочитанную
+app.post('/api/inventory/read', telegramAuth, playerAuth, async (req, res) => {
+  const { inv_id } = req.body;
+  try {
+    await pool.query('UPDATE player_inventory SET is_new = FALSE WHERE id = $1 AND player_id = $2', [inv_id, req.player.id]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Пометить ВСЕ карты как прочитанные
+app.post('/api/inventory/read-all', telegramAuth, playerAuth, async (req, res) => {
+  try {
+    await pool.query('UPDATE player_inventory SET is_new = FALSE WHERE player_id = $1', [req.player.id]);
+    res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
