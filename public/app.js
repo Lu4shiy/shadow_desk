@@ -257,64 +257,250 @@ function showMain(profile) {
   }
 }
 
-async function renderInventory() {
-  const container = document.getElementById('inventory-container');
-  
+// --- ЛОГИКА ИНВЕНТАРЯ ---
+
+let allInventoryCards = []; // Храним все карты в памяти
+let currentTab = 'deck'; // 'deck' или 'all'
+let longPressTimer;
+
+const rarityNames = { grey: 'Частая', purple: 'Обычная', orange: 'Редкая', blue: 'Супер-редкая', gold: 'Легендарная' };
+const rarityColors = { grey: '#aaa', purple: '#9b59b6', orange: '#e67e22', blue: '#3498db', gold: '#f1c40f' };
+
+async function loadInventory() {
   try {
     const data = await apiFetch('/api/inventory');
-    const cards = data.cards;
-
-    if (cards.length === 0) {
-      container.innerHTML = `<div style="grid-column: 1 / -1; text-align: center; padding: 40px; color: #555; border: 2px dashed #333; border-radius: 12px;">У вас пока нет карт.<br>Загляните в магазин!</div>`;
-      return;
-    }
-
-    let deckCount = 0; // Считаем карты в колоде
-
-    container.innerHTML = cards.map(card => {
-      if (card.in_deck) deckCount++;
-      
-      // Добавляем рамку, если карта в колоде
-      const inDeckStyle = card.in_deck ? 'border: 3px solid #2ecc71; box-shadow: 0 0 15px #2ecc71; transform: scale(0.95);' : '';
-      
-      let cardHtml = '';
-      if (card.image_url) {
-        cardHtml = `<img src="/img/cards/${card.image_url}" alt="${card.name}" />`;
-      } else {
-        cardHtml = `<div style="background-image: url('/img/card_template_${card.rarity}.png'); background-size: 100% 100%; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center;">
-            <div style="background: rgba(0,0,0,0.7); padding: 10px; border-radius: 8px; color: #fff; text-align: center; font-size: 12px;">
-              ${card.name}<br><span style="font-size: 10px; color: #aaa;">Нет арта</span>
-            </div>
-          </div>`;
-      }
-
-      // Возвращаем карточку с обработчиком клика
-      return `
-        <div class="game-card" style="${inDeckStyle}" onclick="toggleDeckCard(${card.inv_id})">
-          ${cardHtml}
-        </div>
-      `;
-    }).join('');
-
-    // Обновляем счетчик колоды в интерфейсе
-    document.getElementById('deck-counter').textContent = deckCount;
+    allInventoryCards = data.cards;
+    updateInventoryUI();
   } catch (err) {
-    container.innerHTML = `<div style="color:red; grid-column: 1 / -1;">Ошибка загрузки: ${err.message}</div>`;
+    document.getElementById('inventory-container').innerHTML = `<div style="color:red; grid-column: 1 / -1;">Ошибка загрузки: ${err.message}</div>`;
   }
 }
 
+function updateInventoryUI() {
+  // 1. Обновляем счетчик колоды (считаем по всем картам)
+  const deckCount = allInventoryCards.filter(c => c.in_deck).length;
+  document.getElementById('deck-counter').textContent = deckCount;
+
+  // 2. Фильтрация
+  const typeFilter = document.getElementById('filter-type').value;
+  const rarityFilter = document.getElementById('filter-rarity').value;
+  const sortBy = document.getElementById('sort-by').value;
+
+  let filtered = allInventoryCards.filter(card => {
+    if (currentTab === 'deck' && !card.in_deck) return false;
+    if (typeFilter !== 'all' && card.type !== typeFilter) return false;
+    if (rarityFilter !== 'all' && card.rarity !== rarityFilter) return false;
+    return true;
+  });
+
+  // 3. Сортировка
+  const typeWeight = { 'Персонаж': 1, 'Позитивная': 2, 'Негативная': 3, 'Атака': 4, 'Действие': 5 };
+  const rarityWeight = { grey: 1, purple: 2, orange: 3, blue: 4, gold: 5 };
+
+  filtered.sort((a, b) => {
+    if (sortBy === 'rarity-desc') return rarityWeight[b.rarity] - rarityWeight[a.rarity];
+    if (sortBy === 'rarity-asc') return rarityWeight[a.rarity] - rarityWeight[b.rarity];
+    if (sortBy === 'type-asc') return typeWeight[a.type] - typeWeight[b.type];
+    if (sortBy === 'type-desc') return typeWeight[b.type] - typeWeight[a.type];
+    return 0;
+  });
+
+  // 4. Отрисовка
+  const container = document.getElementById('inventory-container');
+  if (filtered.length === 0) {
+    container.innerHTML = `<div style="grid-column: 1 / -1; text-align: center; padding: 40px; color: #555; border: 2px dashed #333; border-radius: 12px;">Здесь пусто.</div>`;
+    return;
+  }
+
+  container.innerHTML = filtered.map(card => {
+    const inDeckStyle = card.in_deck ? 'border: 3px solid #2ecc71; box-shadow: 0 0 15px #2ecc71; transform: scale(0.95);' : '';
+    
+    let cardHtml = '';
+    if (card.image_url) {
+      cardHtml = `<img src="/img/cards/${card.image_url}" alt="${card.name}" />`;
+    } else {
+      cardHtml = `<div style="background-image: url('/img/card_template_${card.rarity}.png'); background-size: 100% 100%; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center;">
+          <div style="background: rgba(0,0,0,0.7); padding: 10px; border-radius: 8px; color: #fff; text-align: center; font-size: 12px;">
+            ${card.name}
+          </div>
+        </div>`;
+    }
+
+    return `
+      <div class="game-card" style="${inDeckStyle}" data-id="${card.inv_id}">
+        ${cardHtml}
+      </div>
+    `;
+  }).join('');
+
+  // 5. Привязка событий к карточкам
+  const cardElements = container.querySelectorAll('.game-card');
+  cardElements.forEach(el => {
+    const invId = el.getAttribute('data-id');
+
+    // Клик (открыть модалку)
+    el.addEventListener('click', (e) => {
+      if (el.dataset.longPressed === 'true') return; // Игнорируем клик после долгого нажатия
+      openCardModal(invId);
+    });
+
+    // ПКМ / Долгое нажатие
+    const startPress = (e) => {
+      el.dataset.longPressed = 'false';
+      longPressTimer = setTimeout(() => {
+        el.dataset.longPressed = 'true';
+        showContextMenu(e, invId);
+      }, 600); // 600мс для долгого нажатия
+    };
+
+    const cancelPress = () => clearTimeout(longPressTimer);
+
+    el.addEventListener('mousedown', startPress);
+    el.addEventListener('touchstart', startPress);
+    el.addEventListener('mouseup', cancelPress);
+    el.addEventListener('touchend', cancelPress);
+    el.addEventListener('touchmove', cancelPress);
+    el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showContextMenu(e, invId);
+    });
+  });
+}
+
+// Переключение вкладок
+document.getElementById('btn-tab-deck').addEventListener('click', () => {
+  currentTab = 'deck';
+  document.getElementById('btn-tab-deck').classList.add('active');
+  document.getElementById('btn-tab-all').classList.remove('active');
+  updateInventoryUI();
+});
+
+document.getElementById('btn-tab-all').addEventListener('click', () => {
+  currentTab = 'all';
+  document.getElementById('btn-tab-all').classList.add('active');
+  document.getElementById('btn-tab-deck').classList.remove('active');
+  updateInventoryUI();
+});
+
+// Слушатели фильтров
+document.getElementById('filter-type').addEventListener('change', updateInventoryUI);
+document.getElementById('filter-rarity').addEventListener('change', updateInventoryUI);
+document.getElementById('sort-by').addEventListener('change', updateInventoryUI);
+
+// Глобальная функция для вызова из showMain
+function renderInventory() {
+  loadInventory();
+}
+
+// Логика переключения колоды
 async function toggleDeckCard(invId) {
   try {
-    const res = await apiFetch('/api/deck/toggle', {
+    await apiFetch('/api/deck/toggle', {
       method: 'POST',
-      body: JSON.stringify({ inv_id: invId })
+      body: JSON.stringify({ inv_id: parseInt(invId) })
     });
-    
-    // Перерисовываем инвентарь, чтобы показать изменения
-    renderInventory();
+    hideContextMenu();
+    document.getElementById('card-detail-modal').style.display = 'none';
+    loadInventory(); // Перезагружаем данные с сервера
   } catch (err) {
     showToast(err.message);
   }
+}
+
+// --- МОДАЛЬНОЕ ОКНО КАРТЫ ---
+function openCardModal(invId) {
+  const card = allInventoryCards.find(c => c.inv_id == invId);
+  if (!card) return;
+
+  document.getElementById('card-detail-name').textContent = card.name;
+  document.getElementById('card-detail-rarity').textContent = rarityNames[card.rarity];
+  document.getElementById('card-detail-rarity').style.color = rarityColors[card.rarity];
+  document.getElementById('card-detail-desc').textContent = card.description;
+
+  // Картинка
+  const imgContainer = document.getElementById('card-detail-image-container');
+  if (card.image_url) {
+    imgContainer.innerHTML = `<img src="/img/cards/${card.image_url}" style="width:100%; display:block;" />`;
+  } else {
+    imgContainer.innerHTML = `<div style="background-image: url('/img/card_template_${card.rarity}.png'); background-size: 100% 100%; aspect-ratio: 4/5; display: flex; justify-content: center; align-items: center;"><div style="background: rgba(0,0,0,0.7); padding: 10px; border-radius: 8px;">${card.name}</div></div>`;
+  }
+
+  // Статы (если персонаж)
+  const statsContainer = document.getElementById('card-detail-stats');
+  if (card.type === 'Персонаж') {
+    statsContainer.innerHTML = `
+      <span style="color:#e74c3c;">⚔️ Урон: ${card.atk}</span>
+      <span style="color:#3498db;">🛡️ Броня: ${card.armor}</span>
+      <span style="color:#2ecc71;">❤️ HP: ${card.hp}</span>
+    `;
+    statsContainer.style.display = 'flex';
+  } else {
+    statsContainer.style.display = 'none';
+  }
+
+  // Кнопка добавления/удаления
+  const toggleBtn = document.getElementById('btn-modal-toggle-deck');
+  if (card.in_deck) {
+    toggleBtn.textContent = 'Убрать из колоды';
+    toggleBtn.className = 'btn-danger';
+  } else {
+    toggleBtn.textContent = 'Добавить в колоду';
+    toggleBtn.className = '';
+    toggleBtn.style.background = 'linear-gradient(135deg, #2ecc71, #27ae60)';
+    toggleBtn.style.boxShadow = '0 4px 15px rgba(46, 204, 113, 0.4)';
+  }
+
+  toggleBtn.onclick = () => toggleDeckCard(card.inv_id);
+  
+  document.getElementById('card-detail-modal').style.display = 'flex';
+}
+
+document.getElementById('btn-close-card-modal').onclick = () => {
+  document.getElementById('card-detail-modal').style.display = 'none';
+};
+
+// --- КОНТЕКСТНОЕ МЕНЮ (ПКМ / Долгое нажатие) ---
+const contextMenu = document.getElementById('context-menu');
+const ctxToggleBtn = document.getElementById('ctx-toggle-deck');
+let activeContextCard = null;
+
+function showContextMenu(e, invId) {
+  e.preventDefault();
+  activeContextCard = allInventoryCards.find(c => c.inv_id == invId);
+  if (!activeContextCard) return;
+
+  // Настраиваем текст кнопки
+  if (activeContextCard.in_deck) {
+    ctxToggleBtn.textContent = 'Убрать из колоды';
+    ctxToggleBtn.style.background = '#e74c3c';
+  } else {
+    ctxToggleBtn.textContent = 'Добавить в колоду';
+    ctxToggleBtn.style.background = '#2ecc71';
+  }
+
+  // Позиционируем меню
+  let x = e.pageX || e.touches[0].pageX;
+  let y = e.pageY || e.touches[0].pageY;
+  
+  // Чтобы меню не уходило за экран
+  if (x > window.innerWidth - 150) x -= 150;
+  if (y > window.innerHeight - 80) y -= 80;
+
+  contextMenu.style.left = x + 'px';
+  contextMenu.style.top = y + 'px';
+  contextMenu.style.display = 'block';
+
+  ctxToggleBtn.onclick = () => toggleDeckCard(activeContextCard.inv_id);
+
+  // Закрываем меню при клике в любое другое место
+  setTimeout(() => {
+    document.addEventListener('click', hideContextMenu, { once: true });
+    document.addEventListener('touchstart', hideContextMenu, { once: true });
+  }, 100);
+}
+
+function hideContextMenu() {
+  contextMenu.style.display = 'none';
 }
 
 init();

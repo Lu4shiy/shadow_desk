@@ -107,6 +107,17 @@
     .nickname-edit { display: flex; gap: 10px; }
     .nickname-edit input { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #444; background: #111; color: #fff; font-family: 'Montserrat', sans-serif; }
     .nickname-edit button { width: auto; padding: 12px 20px; }
+
+      /* Вкладки и фильтры */
+    .tabs-container { display: flex; gap: 10px; margin-bottom: 15px; }
+    .tab-btn { flex: 1; padding: 10px; font-size: 14px; background: #222; color: #888; box-shadow: none; border: 1px solid #333; border-radius: 8px; }
+    .tab-btn.active { background: #9b59b6; color: white; border-color: #9b59b6; }
+    
+    .filters-container { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; }
+    .filter-select { flex: 1; min-width: 100px; padding: 8px; background: #1e1e1e; color: #eee; border: 1px solid #444; border-radius: 8px; font-family: 'Montserrat', sans-serif; font-size: 12px; outline: none; }
+
+    /* Контекстное меню */
+    #context-menu button:active { background: #9b59b6; }
   </style>
 </head>
 <body>
@@ -164,8 +175,40 @@
     </div>
     <!-- Вкладка Инвентарь -->
     <div id="tab-inventory" class="content active">
-      <h2 style="text-align: center; margin-bottom: 10px;">Инвентарь</h2>
-      <p style="text-align: center; color: #888; margin-bottom: 20px; font-size: 14px;">Колода: <span id="deck-counter">0</span> / 12 карт</p>
+      
+      <!-- Вкладки Колода / Все карты -->
+      <div class="tabs-container">
+        <button class="tab-btn active" id="btn-tab-deck">Колода (<span id="deck-counter">0</span>/12)</button>
+        <button class="tab-btn" id="btn-tab-all">Все карты</button>
+      </div>
+
+      <!-- Фильтры и Сортировка -->
+      <div class="filters-container">
+        <select id="filter-type" class="filter-select">
+          <option value="all">Все типы</option>
+          <option value="Персонаж">Персонажи</option>
+          <option value="Позитивная">Позитивные</option>
+          <option value="Негативная">Негативные</option>
+          <option value="Атака">Атаки</option>
+          <option value="Действие">Действия</option>
+        </select>
+        
+        <select id="filter-rarity" class="filter-select">
+          <option value="all">Все редкости</option>
+          <option value="grey">Частые</option>
+          <option value="purple">Обычные</option>
+          <option value="orange">Редкие</option>
+          <option value="blue">Супер-редкие</option>
+          <option value="gold">Легендарные</option>
+        </select>
+
+        <select id="sort-by" class="filter-select">
+          <option value="rarity-desc">Редкость (сначала лучшие)</option>
+          <option value="rarity-asc">Редкость (сначала худшие)</option>
+          <option value="type-asc">Тип (Персонажи → Действия)</option>
+          <option value="type-desc">Тип (Действия → Персонажи)</option>
+        </select>
+      </div>
       
       <div id="inventory-container" class="cards-grid">
         <!-- Сюда скрипт будет добавлять карточки -->
@@ -249,6 +292,33 @@
         <button class="btn-danger" id="btn-confirm-ok" style="margin: 0;">Да</button>
       </div>
     </div>
+  </div>
+
+  <!-- Модальное окно карты -->
+  <div id="card-detail-modal" class="modal-overlay" style="z-index: 3000;">
+    <div class="modal-content" style="padding: 0; background: transparent; border: none; max-width: 320px;">
+      <div id="card-detail-image-container" style="width: 100%; border-radius: 12px; overflow: hidden; margin-bottom: 15px;">
+         <!-- Картинка подставится через JS -->
+      </div>
+      <div style="background: #1e1e1e; border-radius: 12px; padding: 15px; border: 1px solid #333;">
+        <h3 id="card-detail-name" style="margin-bottom: 5px; text-align: center; font-family: 'Cinzel', serif; color: #f1c40f;">Название</h3>
+        <p id="card-detail-rarity" style="text-align: center; font-size: 12px; margin-bottom: 10px; color: #aaa;">Редкость</p>
+        
+        <div id="card-detail-stats" style="display: flex; justify-content: space-around; margin-bottom: 15px; font-weight: bold; font-size: 14px;">
+           <!-- Статы (если есть) -->
+        </div>
+
+        <p id="card-detail-desc" style="font-size: 13px; text-align: center; margin-bottom: 20px; color: #ccc;">Описание...</p>
+        
+        <button id="btn-modal-toggle-deck" style="margin-bottom: 10px;">Добавить в колоду</button>
+        <button id="btn-close-card-modal" class="btn-secondary" style="margin: 0;">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Контекстное меню (ПКМ / Долгое нажатие) -->
+  <div id="context-menu" style="display: none; position: fixed; background: #1a1a1a; border: 1px solid #444; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.8); z-index: 4000; padding: 5px;">
+    <button id="ctx-toggle-deck" style="background: #333; padding: 10px 15px; font-size: 14px; border-radius: 6px; margin: 0; white-space: nowrap;">Добавить в колоду</button>
   </div>
 
   <div id="toast">Текст ошибки</div>
