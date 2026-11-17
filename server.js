@@ -208,8 +208,17 @@ app.post('/api/deck/toggle', telegramAuth, playerAuth, async (req, res) => {
     const currentCard = cardRes.rows[0];
     const newStatus = !currentCard.in_deck;
 
-    // 2. Если мы добавляем карту, проверяем лимиты (макс 12 карт, макс 6 персонажей)
+    // 2. Если мы добавляем карту, проверяем лимиты
     if (newStatus) {
+      // Проверка на дубликат (нельзя добавить две одинаковые карты)
+      const duplicateCheck = await pool.query(
+        'SELECT 1 FROM player_inventory WHERE player_id = $1 AND card_id = $2 AND in_deck = TRUE AND id != $3',
+        [req.player.id, currentCard.card_id, inv_id]
+      );
+      if (duplicateCheck.rows.length > 0) {
+        return res.status(400).json({ error: 'Такая карта уже есть в колоде!' });
+      }
+
       const deckRes = await pool.query(`
         SELECT count(*) as total, 
                sum(case when c.type = 'Персонаж' then 1 else 0 end) as characters
@@ -223,7 +232,6 @@ app.post('/api/deck/toggle', telegramAuth, playerAuth, async (req, res) => {
 
       if (total >= 12) return res.status(400).json({ error: 'В колоде уже 12 карт!' });
       
-      // Получаем тип добавляемой карты
       const typeRes = await pool.query('SELECT type FROM cards WHERE id = $1', [currentCard.card_id]);
       if (typeRes.rows[0].type === 'Персонаж' && characters >= 6) {
         return res.status(400).json({ error: 'В колоде уже максимум 6 персонажей!' });

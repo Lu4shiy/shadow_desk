@@ -245,49 +245,79 @@ function showMain(profile) {
       try {
         const res = await apiFetch('/api/shop/open', { method: 'POST' });
         
-        // Показываем модалку с паком
         const packModal = document.getElementById('pack-modal');
-        const packImage = document.getElementById('pack-image');
+        const packWrapper = document.getElementById('pack-wrapper');
+        const packTop = document.getElementById('pack-top');
         const packResult = document.getElementById('pack-result');
         const cardContainer = document.getElementById('pack-card-container');
         
-        packImage.style.display = 'flex';
-        packImage.style.transform = 'translateX(0)';
+        // Сброс состояний
+        packWrapper.style.display = 'block';
         packResult.style.display = 'none';
+        packTop.style.transform = 'translateX(0) rotate(0deg)';
+        packTop.style.opacity = '1';
         packModal.style.display = 'flex';
 
         // Логика свайпа
         let startX = 0;
-        const onTouchStart = (e) => startX = e.touches ? e.touches[0].clientX : e.clientX;
-        const onTouchEnd = (e) => {
-          const endX = e.changedTouches ? e.changedTouches[0].clientX : e.clientX;
-          if (endX - startX > 50) { // Свайп слева направо
-            packImage.removeEventListener('touchstart', onTouchStart);
-            packImage.removeEventListener('touchend', onTouchEnd);
-            packImage.removeEventListener('mousedown', onTouchStart);
-            packImage.removeEventListener('mouseup', onTouchEnd);
-            openPack(res.card);
+        let currentX = 0;
+        let isDragging = false;
+
+        const onDragStart = (e) => {
+          isDragging = true;
+          startX = e.touches ? e.touches[0].clientX : e.clientX;
+        };
+
+        const onDragMove = (e) => {
+          if (!isDragging) return;
+          currentX = e.touches ? e.touches[0].clientX : e.clientX;
+          const diff = currentX - startX;
+          if (diff > 0) {
+            packTop.style.transform = `translateX(${diff}px) rotate(${diff * 0.1}deg)`;
           }
         };
 
-        packImage.addEventListener('touchstart', onTouchStart);
-        packImage.addEventListener('touchend', onTouchEnd);
-        packImage.addEventListener('mousedown', onTouchStart);
-        packImage.addEventListener('mouseup', onTouchEnd);
+        const onDragEnd = (e) => {
+          if (!isDragging) return;
+          isDragging = false;
+          const diff = currentX - startX;
+          
+          if (diff > 60) { // Если смахнул достаточно далеко
+            packTop.style.transform = `translateX(300px) rotate(20deg)`;
+            packTop.style.opacity = '0';
+            setTimeout(() => openPack(res.card), 250);
+          } else {
+            packTop.style.transform = `translateX(0) rotate(0deg)`; // Возврат
+          }
+          
+          document.removeEventListener('mousemove', onDragMove);
+          document.removeEventListener('mouseup', onDragEnd);
+          document.removeEventListener('touchmove', onDragMove);
+          document.removeEventListener('touchend', onDragEnd);
+        };
+
+        packTop.onmousedown = (e) => {
+          onDragStart(e);
+          document.addEventListener('mousemove', onDragMove);
+          document.addEventListener('mouseup', onDragEnd);
+        };
+        packTop.ontouchstart = (e) => {
+          onDragStart(e);
+          document.addEventListener('touchmove', onDragMove, {passive: false});
+          document.addEventListener('touchend', onDragEnd);
+        };
 
         function openPack(card) {
-          packImage.style.display = 'none';
+          packWrapper.style.display = 'none';
           packResult.style.display = 'flex';
           
-          // Рендерим карту в модалке
           if (card.image_url) {
              cardContainer.innerHTML = `<img src="/img/cards/${card.image_url}" class="card-reveal" style="width: 100%; border-radius: 12px;" />`;
           } else {
              cardContainer.innerHTML = `<div class="card-reveal" style="background-image: url('/img/card_template_${card.rarity}.png'); background-size: 100% 100%; aspect-ratio: 4/5; display: flex; justify-content: center; align-items: center; border-radius: 12px;"><div style="background: rgba(0,0,0,0.8); padding: 10px; border-radius: 8px; font-weight: bold;">${card.name}</div></div>`;
           }
           
-          // Обновляем инвентарь в фоне
-          loadInventory();
+          loadInventory(); // Обновляем инвентарь
         }
 
         document.getElementById('btn-close-pack').onclick = () => {
@@ -394,7 +424,7 @@ function updateInventoryUI() {
     `;
   }).join('');
 
-  // ... (обработчики кликов остаются без изменений, они ниже в твоем файле)
+  // 5. Привязка событий к карточкам
   const cardElements = container.querySelectorAll('.game-card');
   cardElements.forEach(el => {
     const invId = el.getAttribute('data-id');
@@ -411,15 +441,17 @@ function updateInventoryUI() {
         showContextMenu(e, invId);
       }, 600);
     };
+
     const cancelPress = () => clearTimeout(longPressTimer);
 
-    el.addEventListener('mousedown', startPress);
-    el.addEventListener('touchstart', startPress);
-    el.addEventListener('mouseup', cancelPress);
+    el.addEventListener('touchstart', startPress, { passive: true });
     el.addEventListener('touchend', cancelPress);
     el.addEventListener('touchmove', cancelPress);
+    
+    // Для ПКМ на компьютере
     el.addEventListener('contextmenu', (e) => {
       e.preventDefault();
+      el.dataset.longPressed = 'true'; // Блокируем обычный клик
       showContextMenu(e, invId);
     });
   });
@@ -465,16 +497,15 @@ async function toggleDeckCard(invId) {
   }
 }
 
-// --- МОДАЛЬНОЕ ОКНО КАРТЫ ---
 function openCardModal(invId) {
   const card = allInventoryCards.find(c => c.inv_id == invId);
   if (!card) return;
 
-  // Если карта новая - помечаем прочитанной
+  // Убираем NEW и обновляем UI
   if (card.is_new) {
     card.is_new = false;
     apiFetch('/api/inventory/read', { method: 'POST', body: JSON.stringify({ inv_id: invId }) }).catch(console.error);
-    // Перерисовывать сразу не будем, чтобы не мигало, перерисуем при закрытии
+    updateInventoryUI();
   }
 
   document.getElementById('card-detail-name').textContent = card.name;
@@ -482,7 +513,6 @@ function openCardModal(invId) {
   document.getElementById('card-detail-rarity').style.color = rarityColors[card.rarity];
   document.getElementById('card-detail-desc').textContent = card.description;
 
-  // Картинка
   const imgContainer = document.getElementById('card-detail-image-container');
   if (card.image_url) {
     imgContainer.innerHTML = `<img src="/img/cards/${card.image_url}" style="width:100%; display:block;" />`;
@@ -490,7 +520,6 @@ function openCardModal(invId) {
     imgContainer.innerHTML = `<div style="background-image: url('/img/card_template_${card.rarity}.png'); background-size: 100% 100%; aspect-ratio: 4/5; display: flex; justify-content: center; align-items: center;"><div style="background: rgba(0,0,0,0.7); padding: 10px; border-radius: 8px;">${card.name}</div></div>`;
   }
 
-  // Статы (если персонаж)
   const statsContainer = document.getElementById('card-detail-stats');
   if (card.type === 'Персонаж') {
     statsContainer.innerHTML = `
@@ -503,11 +532,12 @@ function openCardModal(invId) {
     statsContainer.style.display = 'none';
   }
 
-  // Кнопка добавления/удаления
   const toggleBtn = document.getElementById('btn-modal-toggle-deck');
   if (card.in_deck) {
     toggleBtn.textContent = 'Убрать из колоды';
     toggleBtn.className = 'btn-danger';
+    toggleBtn.style.background = ''; 
+    toggleBtn.style.boxShadow = '';
   } else {
     toggleBtn.textContent = 'Добавить в колоду';
     toggleBtn.className = '';
@@ -516,7 +546,6 @@ function openCardModal(invId) {
   }
 
   toggleBtn.onclick = () => toggleDeckCard(card.inv_id);
-  
   document.getElementById('card-detail-modal').style.display = 'flex';
 }
 
@@ -531,30 +560,30 @@ let activeContextCard = null;
 
 function showContextMenu(e, invId) {
   e.preventDefault();
+  e.stopPropagation(); 
+
   activeContextCard = allInventoryCards.find(c => c.inv_id == invId);
   if (!activeContextCard) return;
 
-  // Если карта новая - помечаем прочитанной
-  if (card.is_new) {
-    card.is_new = false;
+  if (activeContextCard.is_new) {
+    activeContextCard.is_new = false;
     apiFetch('/api/inventory/read', { method: 'POST', body: JSON.stringify({ inv_id: invId }) }).catch(console.error);
-    // Перерисовывать сразу не будем, чтобы не мигало, перерисуем при закрытии
+    updateInventoryUI();
   }
 
-  // Настраиваем текст кнопки
   if (activeContextCard.in_deck) {
     ctxToggleBtn.textContent = 'Убрать из колоды';
-    ctxToggleBtn.style.background = '#e74c3c';
+    ctxToggleBtn.className = 'btn-danger';
+    ctxToggleBtn.style.background = '';
   } else {
     ctxToggleBtn.textContent = 'Добавить в колоду';
+    ctxToggleBtn.className = '';
     ctxToggleBtn.style.background = '#2ecc71';
   }
 
-  // Позиционируем меню
-  let x = e.pageX || e.touches[0].pageX;
-  let y = e.pageY || e.touches[0].pageY;
+  let x = e.pageX || (e.touches && e.touches[0].pageX) || 0;
+  let y = e.pageY || (e.touches && e.touches[0].pageY) || 0;
   
-  // Чтобы меню не уходило за экран
   if (x > window.innerWidth - 150) x -= 150;
   if (y > window.innerHeight - 80) y -= 80;
 
@@ -564,7 +593,6 @@ function showContextMenu(e, invId) {
 
   ctxToggleBtn.onclick = () => toggleDeckCard(activeContextCard.inv_id);
 
-  // Закрываем меню при клике в любое другое место
   setTimeout(() => {
     document.addEventListener('click', hideContextMenu, { once: true });
     document.addEventListener('touchstart', hideContextMenu, { once: true });

@@ -135,6 +135,23 @@
       100% { transform: scale(1) translateY(0); opacity: 1; }
     }
     .card-reveal { animation: popCard 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+
+    /* Запрет выделения текста на картах */
+    .game-card, .pack-top {
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+    }
+
+    /* Модалка пака */
+    #pack-modal { z-index: 3500; display: none; flex-direction: column; align-items: center; justify-content: center; background: rgba(0,0,0,0.95); }
+    .pack-wrapper { position: relative; width: 220px; height: 320px; margin-bottom: 30px; }
+    .pack-base { position: absolute; inset: 0; background: linear-gradient(135deg, #1a1a1a, #2a1b38); border: 3px solid #71368a; border-radius: 12px; display: flex; justify-content: center; align-items: center; color: #9b59b6; font-family: 'Cinzel', serif; font-size: 24px; box-shadow: 0 0 30px rgba(155, 89, 182, 0.4); }
+    
+    /* Крышечка пака */
+    .pack-top { position: absolute; top: -15px; left: -5px; width: 230px; height: 70px; background: linear-gradient(to bottom, #9b59b6, #71368a); border: 2px solid #fff; border-radius: 8px; box-shadow: 0 5px 15px rgba(0,0,0,0.5); cursor: grab; z-index: 2; display: flex; flex-direction: column; justify-content: center; align-items: center; color: white; font-weight: bold; font-size: 13px; touch-action: none; transition: transform 0.2s ease-out; }
+    .pack-top:active { cursor: grabbing; }
+    .swipe-hint { font-size: 18px; margin-bottom: 2px; }
   </style>
 </head>
 <body>
@@ -347,10 +364,17 @@
 
   <!-- Модальное окно открытия пака -->
   <div id="pack-modal" class="modal-overlay">
-    <h2 style="margin-bottom: 20px; color: #f1c40f; font-family: 'Cinzel', serif;">Смахни, чтобы открыть</h2>
-    <div class="pack-image" id="pack-image">SHADOW DECK</div>
+    <h2 style="margin-bottom: 20px; color: #f1c40f; font-family: 'Cinzel', serif; text-align: center; font-size: 20px;">Смахни крышку вправо</h2>
     
-    <div id="pack-result" style="display: none; flex-direction: column; align-items: center;">
+    <div class="pack-wrapper" id="pack-wrapper">
+      <div class="pack-base">SHADOW DECK</div>
+      <div class="pack-top" id="pack-top">
+        <span class="swipe-hint">⬅️ ➡️</span>
+        <span>ТЯНИ</span>
+      </div>
+    </div>
+    
+    <div id="pack-result" style="display: none; flex-direction: column; align-items: center; width: 100%;">
       <div id="pack-card-container" style="width: 240px; margin-bottom: 20px;"></div>
       <button id="btn-close-pack" style="width: 200px;">Закрыть</button>
     </div>
