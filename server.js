@@ -38,6 +38,28 @@ pool.query(`
   )
 `).catch(err => console.error('DB Init Error:', err));
 
+pool.query(`
+  CREATE TABLE IF NOT EXISTS friendships (
+    id SERIAL PRIMARY KEY,
+    player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    friend_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    status VARCHAR(20) DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(player_id, friend_id)
+  )
+`).catch(err => console.error('DB Init Error:', err));
+
+pool.query(`
+  CREATE TABLE IF NOT EXISTS battle_invites (
+    id SERIAL PRIMARY KEY,
+    from_player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    to_player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    status VARCHAR(20) DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT NOW(),
+    expires_at TIMESTAMP DEFAULT NOW() + INTERVAL '10 minutes'
+  )
+`).catch(err => console.error('DB Init Error:', err));
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(join(__dirname, 'public')));
 
@@ -297,6 +319,257 @@ app.post('/api/inventory/read-all', telegramAuth, playerAuth, async (req, res) =
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ==================== ДРУЗЬЯ ====================
+
+// Поиск игроков по ID или никнейму
+app.get('/api/friends/search', telegramAuth, playerAuth, async (req, res) => {
+  const q = (req.query.q || '').trim();
+  if (!q) return res.json({ success: true, players: [] });
+
+  try {
+    let result;
+    if (/^\d+$/.test(q)) {
+      result = await pool.query(
+        'SELECT id, nickname, avatar_url, level FROM players WHERE id = $1 AND id != $2',
+        [parseInt(q), req.player.id]
+      );
+    } else {
+      result = await pool.query(
+        'SELECT id, nickname, avatar_url, level FROM players WHERE LOWER(nickname) LIKE LOWER($1) AND id != $2 LIMIT 10',
+        [`%${q}%`, req.player.id]
+      );
+    }
+
+    const ids = result.rows.map(r => r.id);
+    const statuses = {};
+    if (ids.length > 0) {
+      const statusRes = await pool.query(
+        `SELECT player_id, friend_id, status FROM friendships
+         WHERE (player_id = $1 AND friend_id = ANY($2))
+            OR (friend_id = $1 AND player_id = ANY($2))`,
+        [req.player.id, ids]
+      );
+      statusRes.rows.forEach(r => {
+        const otherId = r.player_id === req.player.id ? r.friend_id : r.player_id;
+        statuses[otherId] = {
+          status: r.status,
+          direction: r.player_id === req.player.id ? 'outgoing' : 'incoming'
+        };
+      });
+    }
+
+    const players = result.rows.map(p => ({ ...p, friendship: statuses[p.id] || null }));
+    res.json({ success: true, players });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Отправить запрос в друзья
+app.post('/api/friends/request', telegramAuth, playerAuth, async (req, res) => {
+  const targetId = parseInt(req.body.target_id);
+  if (!targetId) return res.status(400).json({ error: 'Не указан игрок' });
+  if (targetId === req.player.id) return res.status(400).json({ error: 'Нельзя добавить себя' });
+
+  try {
+    const targetRes = await pool.query('SELECT id FROM players WHERE id = $1', [targetId]);
+    if (targetRes.rows.length === 0) return res.status(404).json({ error: 'Игрок не найден' });
+
+    const existing = await pool.query(
+      `SELECT * FROM friendships
+       WHERE (player_id = $1 AND friend_id = $2) OR (player_id = $2 AND friend_id = $1)`,
+      [req.player.id, targetId]
+    );
+
+    if (existing.rows.length > 0) {
+      const row = existing.rows[0];
+      if (row.status === 'accepted') return res.status(400).json({ error: 'Вы уже друзья' });
+
+      // Встречный запрос — автопринятие
+      if (row.status === 'pending' && row.player_id === targetId) {
+        await pool.query('UPDATE friendships SET status = $1 WHERE id = $2', ['accepted', row.id]);
+        return res.json({ success: true, status: 'accepted' });
+      }
+      return res.status(400).json({ error: 'Запрос уже отправлен' });
+    }
+
+    await pool.query(
+      'INSERT INTO friendships (player_id, friend_id, status) VALUES ($1, $2, $3)',
+      [req.player.id, targetId, 'pending']
+    );
+    res.json({ success: true, status: 'pending' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Список друзей
+app.get('/api/friends', telegramAuth, playerAuth, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT DISTINCT p.id, p.nickname, p.avatar_url, p.level
+      FROM players p
+      WHERE p.id IN (
+        SELECT friend_id FROM friendships WHERE player_id = $1 AND status = 'accepted'
+        UNION
+        SELECT player_id FROM friendships WHERE friend_id = $1 AND status = 'accepted'
+      )
+      AND p.id != $1
+      ORDER BY p.nickname
+    `, [req.player.id]);
+    res.json({ success: true, friends: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Входящие запросы
+app.get('/api/friends/requests', telegramAuth, playerAuth, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT f.id as request_id, p.id, p.nickname, p.avatar_url, p.level
+      FROM friendships f
+      JOIN players p ON f.player_id = p.id
+      WHERE f.friend_id = $1 AND f.status = 'pending'
+      ORDER BY f.created_at DESC
+    `, [req.player.id]);
+    res.json({ success: true, requests: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Принять запрос
+app.post('/api/friends/accept', telegramAuth, playerAuth, async (req, res) => {
+  const { request_id } = req.body;
+  try {
+    await pool.query(
+      'UPDATE friendships SET status = $1 WHERE id = $2 AND friend_id = $3',
+      ['accepted', request_id, req.player.id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Отклонить запрос / удалить друга
+app.post('/api/friends/decline', telegramAuth, playerAuth, async (req, res) => {
+  const { request_id } = req.body;
+  try {
+    await pool.query(
+      'DELETE FROM friendships WHERE id = $1 AND (friend_id = $2 OR player_id = $2)',
+      [request_id, req.player.id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==================== ПРИГЛАШЕНИЯ В БОЙ ====================
+
+// Отправить приглашение
+app.post('/api/battle/invite', telegramAuth, playerAuth, async (req, res) => {
+  const toId = parseInt(req.body.to_player_id);
+  if (!toId) return res.status(400).json({ error: 'Не указан игрок' });
+
+  try {
+    const friendshipRes = await pool.query(`
+      SELECT 1 FROM friendships
+      WHERE status = 'accepted'
+      AND ((player_id = $1 AND friend_id = $2) OR (player_id = $2 AND friend_id = $1))
+    `, [req.player.id, toId]);
+    if (friendshipRes.rows.length === 0) return res.status(400).json({ error: 'Вы не друзья' });
+
+    // Просрочим старые pending-инвайты от этого игрока
+    await pool.query(
+      `UPDATE battle_invites SET status = 'expired'
+       WHERE from_player_id = $1 AND to_player_id = $2 AND status = 'pending'`,
+      [req.player.id, toId]
+    );
+
+    const result = await pool.query(
+      `INSERT INTO battle_invites (from_player_id, to_player_id, status)
+       VALUES ($1, $2, 'pending')
+       RETURNING id, expires_at`,
+      [req.player.id, toId]
+    );
+    res.json({ success: true, invite: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Получить инвайты (входящие + исходящие + готовые к бою)
+app.get('/api/battle/invites', telegramAuth, playerAuth, async (req, res) => {
+  try {
+    const incoming = await pool.query(`
+      SELECT bi.id, bi.from_player_id as player_id, bi.expires_at, p.nickname, p.avatar_url, p.level
+      FROM battle_invites bi
+      JOIN players p ON bi.from_player_id = p.id
+      WHERE bi.to_player_id = $1 AND bi.status = 'pending' AND bi.expires_at > NOW()
+      ORDER BY bi.created_at DESC
+    `, [req.player.id]);
+
+    const outgoing = await pool.query(`
+      SELECT bi.id, bi.to_player_id as player_id, bi.expires_at, bi.status, p.nickname, p.avatar_url, p.level
+      FROM battle_invites bi
+      JOIN players p ON bi.to_player_id = p.id
+      WHERE bi.from_player_id = $1
+        AND bi.status IN ('pending', 'accepted')
+        AND bi.expires_at > NOW() - INTERVAL '5 minutes'
+      ORDER BY bi.created_at DESC
+    `, [req.player.id]);
+
+    res.json({
+      success: true,
+      incoming: incoming.rows,
+      outgoing: outgoing.rows,
+      ready_battles: outgoing.rows.filter(r => r.status === 'accepted')
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Принять инвайт
+app.post('/api/battle/invite/accept', telegramAuth, playerAuth, async (req, res) => {
+  const { invite_id } = req.body;
+  try {
+    const result = await pool.query(
+      `UPDATE battle_invites SET status = 'accepted'
+       WHERE id = $1 AND to_player_id = $2 AND status = 'pending' AND expires_at > NOW()
+       RETURNING from_player_id, to_player_id, id`,
+      [invite_id, req.player.id]
+    );
+    if (result.rows.length === 0) return res.status(400).json({ error: 'Приглашение не найдено или истекло' });
+    res.json({ success: true, invite: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Отклонить / отменить инвайт
+app.post('/api/battle/invite/decline', telegramAuth, playerAuth, async (req, res) => {
+  const { invite_id } = req.body;
+  try {
+    await pool.query(
+      `UPDATE battle_invites SET status = 'declined'
+       WHERE id = $1 AND (to_player_id = $2 OR from_player_id = $2) AND status = 'pending'`,
+      [invite_id, req.player.id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Заглушка матчмейкинга
+app.post('/api/battle/matchmaking', telegramAuth, playerAuth, async (req, res) => {
+  res.json({ success: true, message: 'Подбор соперника в разработке' });
 });
 
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));

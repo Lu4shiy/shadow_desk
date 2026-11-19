@@ -235,6 +235,11 @@ function showMain(profile) {
         btn.classList.add('active');
         const targetId = btn.getAttribute('data-tab');
         document.getElementById(targetId).classList.add('active');
+        
+        // Дополнительная инициализация при входе на вкладку "В бой"
+        if (targetId === 'tab-battle') {
+          setTimeout(bindBattleTab, 50);
+        }
       });
     });
 
@@ -613,6 +618,294 @@ document.getElementById('btn-mark-all-read').addEventListener('click', async () 
   } catch (err) {
     showToast(err.message);
   }
+});
+
+// ==================== ДРУЗЬЯ И БОЙ ====================
+
+let invitesPollTimer = null;
+let pollTick = 0;
+
+async function loadFriends() {
+  try {
+    const data = await apiFetch('/api/friends');
+    renderFriends(data.friends);
+  } catch (err) { console.error('loadFriends:', err); }
+}
+
+function renderFriends(friends) {
+  const container = document.getElementById('friends-list');
+  if (!friends || friends.length === 0) {
+    container.innerHTML = '<div style="color: #555; text-align: center; padding: 20px; border: 2px dashed #333; border-radius: 12px;">У вас пока нет друзей</div>';
+    return;
+  }
+  const fallbackAvatar = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+  container.innerHTML = friends.map(f => `
+    <div style="display: flex; align-items: center; gap: 10px; background: #1e1e1e; border: 1px solid #333; border-radius: 10px; padding: 10px; margin-bottom: 8px;">
+      <img src="${f.avatar_url || fallbackAvatar}" style="width: 40px; height: 40px; border-radius: 50%; object-fit: cover; border: 2px solid #9b59b6;" />
+      <div style="flex: 1;">
+        <div style="font-weight: bold;">${f.nickname}</div>
+        <div style="font-size: 11px; color: #888;">ID: ${f.id} | Ур. ${f.level}</div>
+      </div>
+      <button class="btn-invite-battle" data-id="${f.id}" data-nickname="${f.nickname}" style="width: auto; padding: 8px 12px; font-size: 12px; background: linear-gradient(135deg, #e74c3c, #c0392b);">⚔️ В бой</button>
+    </div>
+  `).join('');
+
+  container.querySelectorAll('.btn-invite-battle').forEach(btn => {
+    btn.onclick = async () => {
+      const friendId = parseInt(btn.getAttribute('data-id'));
+      const nick = btn.getAttribute('data-nickname');
+      btn.disabled = true;
+      const orig = btn.textContent;
+      btn.textContent = 'Отправлено';
+      try {
+        await apiFetch('/api/battle/invite', { method: 'POST', body: JSON.stringify({ to_player_id: friendId }) });
+        showToast(`Приглашение отправлено ${nick} (10 мин)`, true);
+        loadInvites();
+      } catch (err) {
+        showToast(err.message);
+        btn.disabled = false;
+        btn.textContent = orig;
+      }
+    };
+  });
+}
+
+async function loadFriendRequests() {
+  try {
+    const data = await apiFetch('/api/friends/requests');
+    const container = document.getElementById('friend-requests-container');
+    const list = document.getElementById('friend-requests-list');
+    const fallbackAvatar = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+
+    if (!data.requests || data.requests.length === 0) {
+      container.style.display = 'none';
+      return;
+    }
+
+    container.style.display = 'block';
+    list.innerHTML = data.requests.map(r => `
+      <div style="display: flex; align-items: center; gap: 10px; background: #1e1e1e; border: 1px solid #333; border-radius: 10px; padding: 10px; margin-bottom: 8px;">
+        <img src="${r.avatar_url || fallbackAvatar}" style="width: 40px; height: 40px; border-radius: 50%; object-fit: cover; border: 2px solid #9b59b6;" />
+        <div style="flex: 1;">
+          <div style="font-weight: bold;">${r.nickname}</div>
+          <div style="font-size: 11px; color: #888;">ID: ${r.id}</div>
+        </div>
+        <button class="btn-accept-req" data-id="${r.request_id}" style="width: auto; padding: 8px 12px; font-size: 12px; background: #2ecc71;">✓</button>
+        <button class="btn-decline-req" data-id="${r.request_id}" style="width: auto; padding: 8px 12px; font-size: 12px; background: #e74c3c;">✕</button>
+      </div>
+    `).join('');
+
+    list.querySelectorAll('.btn-accept-req').forEach(btn => {
+      btn.onclick = async () => {
+        try {
+          await apiFetch('/api/friends/accept', { method: 'POST', body: JSON.stringify({ request_id: parseInt(btn.getAttribute('data-id')) }) });
+          showToast('Запрос принят', true);
+          loadFriendRequests();
+          loadFriends();
+        } catch (err) { showToast(err.message); }
+      };
+    });
+    list.querySelectorAll('.btn-decline-req').forEach(btn => {
+      btn.onclick = async () => {
+        try {
+          await apiFetch('/api/friends/decline', { method: 'POST', body: JSON.stringify({ request_id: parseInt(btn.getAttribute('data-id')) }) });
+          loadFriendRequests();
+        } catch (err) { showToast(err.message); }
+      };
+    });
+  } catch (err) { console.error('loadFriendRequests:', err); }
+}
+
+async function loadInvites() {
+  try {
+    const data = await apiFetch('/api/battle/invites');
+    const fallbackAvatar = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+
+    // Входящие
+    const inContainer = document.getElementById('battle-invites-container');
+    const inList = document.getElementById('battle-invites-list');
+    if (!data.incoming || data.incoming.length === 0) {
+      inContainer.style.display = 'none';
+    } else {
+      inContainer.style.display = 'block';
+      inList.innerHTML = data.incoming.map(inv => `
+        <div style="display: flex; align-items: center; gap: 10px; background: #1e1e1e; border: 1px solid #e74c3c; border-radius: 10px; padding: 10px; margin-bottom: 8px;">
+          <img src="${inv.avatar_url || fallbackAvatar}" style="width: 40px; height: 40px; border-radius: 50%; object-fit: cover; border: 2px solid #e74c3c;" />
+          <div style="flex: 1;">
+            <div style="font-weight: bold;">${inv.nickname}</div>
+            <div style="font-size: 11px; color: #888;">приглашает в бой</div>
+          </div>
+          <button class="btn-accept-invite" data-id="${inv.id}" style="width: auto; padding: 8px 12px; font-size: 12px; background: #2ecc71;">Принять</button>
+          <button class="btn-decline-invite" data-id="${inv.id}" style="width: auto; padding: 8px 12px; font-size: 12px; background: #e74c3c;">✕</button>
+        </div>
+      `).join('');
+
+      inList.querySelectorAll('.btn-accept-invite').forEach(btn => {
+        btn.onclick = async () => {
+          try {
+            await apiFetch('/api/battle/invite/accept', { method: 'POST', body: JSON.stringify({ invite_id: parseInt(btn.getAttribute('data-id')) }) });
+            showToast('Приглашение принято! Бой скоро начнётся...', true);
+            loadInvites();
+          } catch (err) { showToast(err.message); }
+        };
+      });
+      inList.querySelectorAll('.btn-decline-invite').forEach(btn => {
+        btn.onclick = async () => {
+          try {
+            await apiFetch('/api/battle/invite/decline', { method: 'POST', body: JSON.stringify({ invite_id: parseInt(btn.getAttribute('data-id')) }) });
+            loadInvites();
+          } catch (err) { showToast(err.message); }
+        };
+      });
+    }
+
+    // Исходящие
+    const outContainer = document.getElementById('battle-outgoing-container');
+    const outList = document.getElementById('battle-outgoing-list');
+    const pendingOut = (data.outgoing || []).filter(o => o.status === 'pending');
+    if (pendingOut.length === 0) {
+      outContainer.style.display = 'none';
+    } else {
+      outContainer.style.display = 'block';
+      outList.innerHTML = pendingOut.map(o => `
+        <div style="display: flex; align-items: center; gap: 10px; background: #1e1e1e; border: 1px dashed #666; border-radius: 10px; padding: 10px; margin-bottom: 8px;">
+          <img src="${o.avatar_url || fallbackAvatar}" style="width: 40px; height: 40px; border-radius: 50%; object-fit: cover; border: 2px solid #666; opacity: 0.7;" />
+          <div style="flex: 1;">
+            <div style="font-weight: bold;">${o.nickname}</div>
+            <div style="font-size: 11px; color: #888;">ожидает ответа...</div>
+          </div>
+          <button class="btn-cancel-invite" data-id="${o.id}" style="width: auto; padding: 8px 12px; font-size: 12px; background: #555;">Отменить</button>
+        </div>
+      `).join('');
+
+      outList.querySelectorAll('.btn-cancel-invite').forEach(btn => {
+        btn.onclick = async () => {
+          try {
+            await apiFetch('/api/battle/invite/decline', { method: 'POST', body: JSON.stringify({ invite_id: parseInt(btn.getAttribute('data-id')) }) });
+            loadInvites();
+          } catch (err) { showToast(err.message); }
+        };
+      });
+    }
+
+    // Готовые бои (для инициатора)
+    if (data.ready_battles && data.ready_battles.length > 0) {
+      const seen = JSON.parse(sessionStorage.getItem('seen_battles') || '[]');
+      data.ready_battles.forEach(b => {
+        if (!seen.includes(b.id)) {
+          showToast(`${b.nickname} принял приглашение! Бой скоро начнётся...`, true);
+          seen.push(b.id);
+        }
+      });
+      sessionStorage.setItem('seen_battles', JSON.stringify(seen));
+    }
+  } catch (err) { console.error('loadInvites:', err); }
+}
+
+async function searchFriends() {
+  const input = document.getElementById('friend-search-input');
+  const q = input.value.trim();
+  if (!q) return;
+
+  const results = document.getElementById('friend-search-results');
+  results.innerHTML = '<div style="color: #888; padding: 10px;">Поиск...</div>';
+  const fallbackAvatar = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+
+  try {
+    const data = await apiFetch('/api/friends/search?q=' + encodeURIComponent(q));
+    if (!data.players || data.players.length === 0) {
+      results.innerHTML = '<div style="color: #888; padding: 10px; text-align: center;">Никого не найдено</div>';
+      return;
+    }
+    results.innerHTML = data.players.map(p => {
+      let actionBtn = '';
+      if (!p.friendship) {
+        actionBtn = `<button class="btn-add-friend" data-id="${p.id}" style="width: auto; padding: 8px 12px; font-size: 12px; background: #2ecc71;">Добавить</button>`;
+      } else if (p.friendship.status === 'pending' && p.friendship.direction === 'outgoing') {
+        actionBtn = `<span style="font-size: 11px; color: #888;">Запрос отправлен</span>`;
+      } else if (p.friendship.status === 'pending' && p.friendship.direction === 'incoming') {
+        actionBtn = `<button class="btn-add-friend" data-id="${p.id}" style="width: auto; padding: 8px 12px; font-size: 12px; background: #2ecc71;">Принять</button>`;
+      } else if (p.friendship.status === 'accepted') {
+        actionBtn = `<span style="font-size: 11px; color: #2ecc71;">Уже друг</span>`;
+      }
+      return `
+        <div style="display: flex; align-items: center; gap: 10px; background: #1e1e1e; border: 1px solid #333; border-radius: 10px; padding: 10px; margin-bottom: 8px;">
+          <img src="${p.avatar_url || fallbackAvatar}" style="width: 40px; height: 40px; border-radius: 50%; object-fit: cover; border: 2px solid #9b59b6;" />
+          <div style="flex: 1;">
+            <div style="font-weight: bold;">${p.nickname}</div>
+            <div style="font-size: 11px; color: #888;">ID: ${p.id} | Ур. ${p.level}</div>
+          </div>
+          ${actionBtn}
+        </div>
+      `;
+    }).join('');
+
+    results.querySelectorAll('.btn-add-friend').forEach(btn => {
+      btn.onclick = async () => {
+        try {
+          const res = await apiFetch('/api/friends/request', { method: 'POST', body: JSON.stringify({ target_id: parseInt(btn.getAttribute('data-id')) }) });
+          showToast(res.status === 'accepted' ? 'Теперь вы друзья!' : 'Запрос отправлен', true);
+          searchFriends();
+          loadFriends();
+          loadFriendRequests();
+        } catch (err) { showToast(err.message); }
+      };
+    });
+  } catch (err) {
+    results.innerHTML = `<div style="color: #e74c3c; padding: 10px;">${err.message}</div>`;
+  }
+}
+
+function startBattlePolling() {
+  if (invitesPollTimer) clearInterval(invitesPollTimer);
+  pollTick = 0;
+  invitesPollTimer = setInterval(async () => {
+    if (mainScreen.style.display === 'none') return;
+    pollTick++;
+    try { await loadInvites(); } catch (e) {}
+    if (pollTick % 4 === 0) { // раз в 20 секунд
+      try { await loadFriends(); } catch (e) {}
+      try { await loadFriendRequests(); } catch (e) {}
+    }
+  }, 5000);
+}
+
+// ==================== ХУК В showMain ====================
+
+function bindBattleTab() {
+  const matchBtn = document.getElementById('btn-matchmaking');
+  if (matchBtn) {
+    matchBtn.onclick = async () => {
+      try {
+        const res = await apiFetch('/api/battle/matchmaking', { method: 'POST' });
+        showToast(res.message || 'Подбор в разработке');
+      } catch (err) { showToast(err.message); }
+    };
+  }
+
+  const searchBtn = document.getElementById('btn-friend-search');
+  const searchInput = document.getElementById('friend-search-input');
+  if (searchBtn) searchBtn.onclick = searchFriends;
+  if (searchInput) {
+    searchInput.onkeydown = (e) => { if (e.key === 'Enter') searchFriends(); };
+  }
+
+  loadFriends();
+  loadFriendRequests();
+  loadInvites();
+  startBattlePolling();
+}
+
+// Перехватываем переключение вкладок, чтобы дёрнуть загрузку
+document.addEventListener('DOMContentLoaded', () => {
+  const navBtns = document.querySelectorAll('.nav-btn');
+  navBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (btn.getAttribute('data-tab') === 'tab-battle') {
+        setTimeout(bindBattleTab, 50);
+      }
+    });
+  });
 });
 
 init();

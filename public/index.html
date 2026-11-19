@@ -253,10 +253,45 @@
       </div>
     </div>
 
-    <!-- Вкладка В бой (Заглушка) -->
+    <!-- Вкладка В бой -->
     <div id="tab-battle" class="content">
-      <h2 style="text-align: center;">Поиск соперника...</h2>
-      <p style="text-align: center; color: #888; margin-top: 10px;">Режим боя появится в следующем обновлении.</p>
+      <button id="btn-matchmaking" style="background: linear-gradient(135deg, #e74c3c, #c0392b); margin-bottom: 20px;">⚔️ Подбор соперника</button>
+
+      <!-- Входящие приглашения в бой -->
+      <div id="battle-invites-container" style="display: none; margin-bottom: 20px;">
+        <h3 style="margin-bottom: 10px; font-size: 16px;">Приглашения в бой</h3>
+        <div id="battle-invites-list"></div>
+      </div>
+
+      <!-- Исходящие приглашения (ожидание) -->
+      <div id="battle-outgoing-container" style="display: none; margin-bottom: 20px;">
+        <h3 style="margin-bottom: 10px; font-size: 16px;">Ваши приглашения</h3>
+        <div id="battle-outgoing-list"></div>
+      </div>
+
+      <!-- Запросы в друзья -->
+      <div id="friend-requests-container" style="display: none; margin-bottom: 20px;">
+        <h3 style="margin-bottom: 10px; font-size: 16px;">Запросы в друзья</h3>
+        <div id="friend-requests-list"></div>
+      </div>
+
+      <!-- Список друзей -->
+      <div style="margin-bottom: 20px;">
+        <h3 style="margin-bottom: 10px; font-size: 16px;">Друзья</h3>
+        <div id="friends-list">
+          <div style="color: #555; text-align: center; padding: 20px; border: 2px dashed #333; border-radius: 12px;">У вас пока нет друзей</div>
+        </div>
+      </div>
+
+      <!-- Добавление друга -->
+      <div style="margin-bottom: 20px;">
+        <h3 style="margin-bottom: 10px; font-size: 16px;">Добавить друга</h3>
+        <div class="nickname-edit" style="margin-bottom: 10px;">
+          <input type="text" id="friend-search-input" placeholder="ID или никнейм..." autocomplete="off" />
+          <button id="btn-friend-search" style="width: auto; padding: 12px 20px;">Найти</button>
+        </div>
+        <div id="friend-search-results"></div>
+      </div>
     </div>
 
     <!-- Вкладка Магазин -->
