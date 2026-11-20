@@ -1084,22 +1084,37 @@ function startBattlePolling() {
 
 let mmPollTimer = null;
 
+function showOpponentFound(battleId) {
+  if (mmPollTimer) { clearInterval(mmPollTimer); mmPollTimer = null; }
+  document.getElementById('mm-modal').style.display = 'none';
+  document.getElementById('mm-found-modal').style.display = 'flex';
+
+  setTimeout(() => {
+    document.getElementById('mm-found-modal').style.display = 'none';
+    mmSearchActive = false;
+    const matchBtn = document.getElementById('btn-matchmaking');
+    if (matchBtn) matchBtn.disabled = false;
+    if (window.joinBattle) window.joinBattle(battleId);
+  }, 2000);
+}
+
 function startMatchmakingPolling() {
   if (mmPollTimer) clearInterval(mmPollTimer);
   mmPollTimer = setInterval(async () => {
     try {
       const res = await apiFetch('/api/battle/matchmaking/status');
-      if (res.status === 'matched') {
+      if (res.status === 'matched' && res.battle_id) {
         clearInterval(mmPollTimer);
         mmPollTimer = null;
-        document.getElementById('mm-modal').style.display = 'none';
-        if (window.joinBattle) window.joinBattle(res.battle_id);
+        showOpponentFound(res.battle_id);
       } else if (res.status === 'none') {
-        // был удален из очереди (например, после 5 минут)
         clearInterval(mmPollTimer);
         mmPollTimer = null;
         document.getElementById('mm-modal').style.display = 'none';
         showToast('Поиск отменён');
+        mmSearchActive = false;
+        const matchBtn = document.getElementById('btn-matchmaking');
+        if (matchBtn) matchBtn.disabled = false;
       }
     } catch (e) { console.error(e); }
   }, 2000);
@@ -1108,26 +1123,41 @@ function startMatchmakingPolling() {
 document.getElementById('mm-cancel').onclick = async () => {
   if (mmPollTimer) { clearInterval(mmPollTimer); mmPollTimer = null; }
   document.getElementById('mm-modal').style.display = 'none';
+  mmSearchActive = false;
+  const matchBtn = document.getElementById('btn-matchmaking');
+  if (matchBtn) matchBtn.disabled = false;
   try {
     await apiFetch('/api/battle/matchmaking/cancel', { method: 'POST' });
   } catch (e) {}
 };
 
+let mmSearchActive = false;
+
 function bindBattleTab() {
   const matchBtn = document.getElementById('btn-matchmaking');
   if (matchBtn) {
     matchBtn.onclick = async () => {
+      if (mmSearchActive) return;
+      mmSearchActive = true;
+      matchBtn.disabled = true;
       try {
         const res = await apiFetch('/api/battle/matchmaking', { method: 'POST' });
         if (res.battle_id) {
-          if (window.joinBattle) window.joinBattle(res.battle_id);
+          showOpponentFound(res.battle_id);
           return;
         }
         if (res.searching) {
           document.getElementById('mm-modal').style.display = 'flex';
           startMatchmakingPolling();
+        } else {
+          mmSearchActive = false;
+          matchBtn.disabled = false;
         }
-      } catch (err) { showToast(err.message); }
+      } catch (err) {
+        showToast(err.message);
+        mmSearchActive = false;
+        matchBtn.disabled = false;
+      }
     };
   }
 

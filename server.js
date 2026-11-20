@@ -719,41 +719,80 @@ app.post('/api/battle/invite/decline', telegramAuth, playerAuth, async (req, res
 
 // Матчмейкинг
 app.post('/api/battle/matchmaking', telegramAuth, playerAuth, async (req, res) => {
+  const client = await pool.connect();
   try {
-    const myDeck = await pool.query('SELECT count(*) FROM player_inventory WHERE player_id = $1 AND in_deck = TRUE', [req.player.id]);
+    // Защита от дабл-клика: проверяем активный бой
+    const existingBattle = await client.query(
+      `SELECT id FROM battles WHERE status = 'active' AND (player1_id = $1 OR player2_id = $1) LIMIT 1`,
+      [req.player.id]
+    );
+    if (existingBattle.rows.length > 0) {
+      client.release();
+      return res.status(400).json({ error: 'У вас уже есть активный бой', battle_id: existingBattle.rows[0].id });
+    }
+
+    const myDeck = await client.query('SELECT count(*) FROM player_inventory WHERE player_id = $1 AND in_deck = TRUE', [req.player.id]);
     if (parseInt(myDeck.rows[0].count) !== 12) {
+      client.release();
       return res.status(400).json({ error: 'У вас должно быть ровно 12 карт в колоде' });
     }
 
-    const myLevel = req.player.level || 1;
-    await pool.query(`DELETE FROM matchmaking_queue WHERE created_at < NOW() - INTERVAL '5 minutes'`);
+    await client.query('BEGIN');
 
-    const oppRes = await pool.query(`
-      SELECT player_id FROM matchmaking_queue
+    // Чистим устаревшие заявки
+    await client.query(`DELETE FROM matchmaking_queue WHERE created_at < NOW() - INTERVAL '5 minutes'`);
+
+    const myLevel = req.player.level || 1;
+
+    // FOR UPDATE SKIP LOCKED — защита от одновременного матчинга нескольких игроков
+    const oppRes = await client.query(`
+      SELECT player_id, level FROM matchmaking_queue
       WHERE player_id != $1 AND status = 'searching'
       ORDER BY ABS(level - $2) ASC LIMIT 1
+      FOR UPDATE SKIP LOCKED
     `, [req.player.id, myLevel]);
 
     if (oppRes.rows.length > 0) {
       const oppId = oppRes.rows[0].player_id;
-      const oppDeck = await pool.query('SELECT count(*) FROM player_inventory WHERE player_id = $1 AND in_deck = TRUE', [oppId]);
+      const oppLevel = oppRes.rows[0].level || 1;
+
+      const oppDeck = await client.query('SELECT count(*) FROM player_inventory WHERE player_id = $1 AND in_deck = TRUE', [oppId]);
       if (parseInt(oppDeck.rows[0].count) !== 12) {
-        await pool.query(`DELETE FROM matchmaking_queue WHERE player_id = $1`, [oppId]);
+        await client.query(`DELETE FROM matchmaking_queue WHERE player_id = $1`, [oppId]);
+        await client.query('COMMIT');
+        client.release();
         return res.json({ success: true, searching: true });
       }
 
-      const battleId = await createBattle(req.player.id, oppId);
-      await pool.query(`UPDATE matchmaking_queue SET status = 'matched', battle_id = $1 WHERE player_id IN ($2, $3)`, [battleId, req.player.id, oppId]);
+      // Создаём бой внутри транзакции
+      const battleId = await createBattle(req.player.id, oppId, client);
+
+      // Помечаем обоих как matched
+      await client.query(`UPDATE matchmaking_queue SET status = 'matched', battle_id = $1 WHERE player_id = $2`, [battleId, oppId]);
+      await client.query(`
+        INSERT INTO matchmaking_queue (player_id, level, status, battle_id, created_at)
+        VALUES ($1, $2, 'matched', $3, NOW())
+        ON CONFLICT (player_id) DO UPDATE SET status = 'matched', battle_id = $3, created_at = NOW()
+      `, [req.player.id, myLevel, battleId]);
+
+      await client.query('COMMIT');
+      client.release();
       return res.json({ success: true, battle_id: battleId });
     } else {
-      await pool.query(`
+      await client.query(`
         INSERT INTO matchmaking_queue (player_id, level, status, battle_id, created_at)
         VALUES ($1, $2, 'searching', NULL, NOW())
-        ON CONFLICT (player_id) DO UPDATE SET status = 'searching', created_at = NOW()
+        ON CONFLICT (player_id) DO UPDATE SET status = 'searching', battle_id = NULL, created_at = NOW()
       `, [req.player.id, myLevel]);
+      await client.query('COMMIT');
+      client.release();
       return res.json({ success: true, searching: true });
     }
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch(e) {}
+    client.release();
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/battle/matchmaking/status', telegramAuth, playerAuth, async (req, res) => {
@@ -842,15 +881,15 @@ function checkBattleEnd(state) {
   else if (state.p2.hp <= 0) { state.status = 'finished'; state.winner = 'p1'; }
 }
 
-async function createBattle(player1Id, player2Id) {
+async function createBattle(player1Id, player2Id, clientOrPool = pool) {
   const [deckRes1, deckRes2, playersRes] = await Promise.all([
-    pool.query(`SELECT inv.id as inv_id, c.* FROM player_inventory inv
-                JOIN cards c ON inv.card_id = c.id
-                WHERE inv.player_id = $1 AND inv.in_deck = TRUE`, [player1Id]),
-    pool.query(`SELECT inv.id as inv_id, c.* FROM player_inventory inv
-                JOIN cards c ON inv.card_id = c.id
-                WHERE inv.player_id = $1 AND inv.in_deck = TRUE`, [player2Id]),
-    pool.query(`SELECT id, nickname, avatar_url, level FROM players WHERE id = ANY($1)`, [[player1Id, player2Id]])
+    clientOrPool.query(`SELECT inv.id as inv_id, c.* FROM player_inventory inv
+                        JOIN cards c ON inv.card_id = c.id
+                        WHERE inv.player_id = $1 AND inv.in_deck = TRUE`, [player1Id]),
+    clientOrPool.query(`SELECT inv.id as inv_id, c.* FROM player_inventory inv
+                        JOIN cards c ON inv.card_id = c.id
+                        WHERE inv.player_id = $1 AND inv.in_deck = TRUE`, [player2Id]),
+    clientOrPool.query(`SELECT id, nickname, avatar_url, level FROM players WHERE id = ANY($1)`, [[player1Id, player2Id]])
   ]);
 
   const deck1 = deckRes1.rows, deck2 = deckRes2.rows;
@@ -860,13 +899,14 @@ async function createBattle(player1Id, player2Id) {
 
   const now = Date.now();
   const state = {
-    p1: { player: playerMap[player1Id], hp: 30, maxHp: 30, energy: 10, maxEnergy: 10, hand: [], board: [], turnNumber: 0, lastSeen: now, heroShield: false },
-    p2: { player: playerMap[player2Id], hp: 30, maxHp: 30, energy: 10, maxEnergy: 10, hand: [], board: [], turnNumber: 0, lastSeen: now, heroShield: false },
+    p1: { player: playerMap[player1Id], hp: 30, maxHp: 30, energy: 10, maxEnergy: 10, hand: [], board: [], turnNumber: 0, lastSeen: now, enteredBattle: false, heroShield: false },
+    p2: { player: playerMap[player2Id], hp: 30, maxHp: 30, energy: 10, maxEnergy: 10, hand: [], board: [], turnNumber: 0, lastSeen: now, enteredBattle: false, heroShield: false },
     cards: {},
     currentTurnPlayer: 'p1',
     status: 'active',
     winner: null,
     turnPausedAt: null,
+    createdAt: now,
     log: []
   };
 
@@ -875,7 +915,7 @@ async function createBattle(player1Id, player2Id) {
 
   startTurn(state, 'p1');
 
-  const result = await pool.query(
+  const result = await clientOrPool.query(
     'INSERT INTO battles (player1_id, player2_id, state) VALUES ($1, $2, $3) RETURNING id',
     [player1Id, player2Id, JSON.stringify(state)]
   );
@@ -894,9 +934,10 @@ async function loadBattle(req, res, next) {
     req.battle = battle;
     req.playerKey = battle.player1_id === req.player.id ? 'p1' : 'p2';
     req.oppKey = req.playerKey === 'p1' ? 'p2' : 'p1';
-    // Обновляем lastSeen игрока (in-memory, сохранится в saveBattleState или GET)
+    // Обновляем lastSeen и флаг входа
     if (battle.state[req.playerKey]) {
       battle.state[req.playerKey].lastSeen = Date.now();
+      battle.state[req.playerKey].enteredBattle = true;
     }
     next();
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1253,28 +1294,17 @@ app.get('/api/battle/:id', telegramAuth, playerAuth, loadBattle, async (req, res
     const oppKey = req.oppKey;
     const now = Date.now();
 
-    const oppLastSeen = state[oppKey]?.lastSeen || now;
-    const myLastSeen = state[myKey]?.lastSeen || now;
+    const createdAt = state.createdAt || (req.battle.created_at ? new Date(req.battle.created_at).getTime() : now);
+    const oppEntered = state[oppKey]?.enteredBattle === true;
+    const oppLastSeen = oppEntered ? (state[oppKey]?.lastSeen || 0) : createdAt;
     const oppGoneSec = (now - oppLastSeen) / 1000;
-    const myGoneSec = (now - myLastSeen) / 1000;
 
-    // === Таймауты переподключения ===
-    if (state.status === 'active') {
-      if (oppGoneSec > 60 && myGoneSec > 60) {
-        state.status = 'finished';
-        state.winner = null;
-        state.log.push('⏱ Оба игрока не вернулись — ничья');
-      } else if (oppGoneSec > 60) {
-        state.status = 'finished';
-        state.winner = myKey;
-        state[oppKey].hp = 0;
-        state.log.push('⏱ Соперник не вернулся — тех. поражение');
-      } else if (myGoneSec > 60) {
-        state.status = 'finished';
-        state.winner = oppKey;
-        state[myKey].hp = 0;
-        state.log.push('⏱ Вы не вернулись вовремя — тех. поражение');
-      }
+    // === Таймаут для соперника (своего не проверяем — loadBattle только что обновил мой lastSeen) ===
+    if (state.status === 'active' && oppGoneSec > 60) {
+      state.status = 'finished';
+      state.winner = myKey;
+      state[oppKey].hp = 0;
+      state.log.push(oppEntered ? '⏱ Соперник не вернулся — тех. поражение' : '⏱ Соперник не зашёл в бой');
     }
 
     // === Пауза таймера хода, если соперник отключён > 4с ===
@@ -1523,32 +1553,61 @@ app.get('/api/active-battle', telegramAuth, playerAuth, async (req, res) => {
     const oppKey = myKey === 'p1' ? 'p2' : 'p1';
     const state = battle.state;
     const now = Date.now();
+    const createdAt = state.createdAt || (battle.created_at ? new Date(battle.created_at).getTime() : now);
 
-    const myLastSeen = state[myKey]?.lastSeen || 0;
-    const oppLastSeen = state[oppKey]?.lastSeen || 0;
-    const myGoneSec = myLastSeen ? (now - myLastSeen) / 1000 : 999;
-    const oppGoneSec = oppLastSeen ? (now - oppLastSeen) / 1000 : 999;
+    const myEntered = state[myKey]?.enteredBattle === true;
+    const oppEntered = state[oppKey]?.enteredBattle === true;
 
-    // Таймауты переподключения
-    let finished = false;
-    if (myGoneSec > 60 && oppGoneSec > 60) {
-      state.status = 'finished'; state.winner = null; finished = true;
-      state.log.push('Оба не вернулись — ничья');
-    } else if (oppGoneSec > 60) {
-      state.status = 'finished'; state.winner = myKey; state[oppKey].hp = 0; finished = true;
-      state.log.push('Соперник не вернулся');
-    } else if (myGoneSec > 60) {
-      state.status = 'finished'; state.winner = oppKey; state[myKey].hp = 0; finished = true;
-      state.log.push('Вы не вернулись вовремя');
+    const myLastSeen = myEntered ? (state[myKey]?.lastSeen || 0) : createdAt;
+    const oppLastSeen = oppEntered ? (state[oppKey]?.lastSeen || 0) : createdAt;
+    const myGoneSec = (now - myLastSeen) / 1000;
+    const oppGoneSec = (now - oppLastSeen) / 1000;
+
+    // === Игрок ещё НЕ входил в бой ===
+    // Это НЕ реконнект, а первый вход. Не показываем баннер (игрок войдёт через accept/loadInvites).
+    if (!myEntered) {
+      if (state.status === 'active' && myGoneSec > 60) {
+        // Слишком долго не заходил — тех. поражение
+        if (oppGoneSec > 60) {
+          state.status = 'finished';
+          state.winner = null;
+          state.log.push('Оба не зашли в бой');
+        } else {
+          state.status = 'finished';
+          state.winner = oppKey;
+          state[myKey].hp = 0;
+          state.log.push('Вы не зашли в бой');
+        }
+        await saveBattleState(battle);
+        return res.json({ success: true, battle_id: null, finished: true });
+      }
+      return res.json({ success: true, battle_id: null });
     }
 
-    if (finished) {
-      await saveBattleState(battle);
-      return res.json({ success: true, battle_id: null, finished: true });
+    // === Игрок ВХОДИЛ — проверяем реконнект ===
+    if (state.status === 'active') {
+      if (myGoneSec > 60 && oppGoneSec > 60) {
+        state.status = 'finished';
+        state.winner = null;
+        state.log.push('⏱ Оба не вернулись — ничья');
+      } else if (myGoneSec > 60) {
+        state.status = 'finished';
+        state.winner = oppKey;
+        state[myKey].hp = 0;
+        state.log.push('⏱ Вы не вернулись вовремя');
+      } else if (oppGoneSec > 60) {
+        state.status = 'finished';
+        state.winner = myKey;
+        state[oppKey].hp = 0;
+        state.log.push('⏱ Соперник не вернулся');
+      }
+      if (state.status === 'finished') {
+        await saveBattleState(battle);
+        return res.json({ success: true, battle_id: null, finished: true });
+      }
     }
 
-    // Показываем баннер ТОЛЬКО если игрок реально отсутствовал (закрыл вкладку)
-    // Если ты сейчас в игре и поллишь — myLastSeen обновляется → myGoneSec мал
+    // Баннер только если реально отсутствовал > 5 сек
     if (myGoneSec < 5) {
       return res.json({ success: true, battle_id: null });
     }
