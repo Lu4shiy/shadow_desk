@@ -110,6 +110,17 @@ pool.query(`ALTER TABLE cards ADD COLUMN IF NOT EXISTS cost INTEGER DEFAULT 1`).
   }
 })();
 
+// Очередь матчмейкинга
+pool.query(`
+  CREATE TABLE IF NOT EXISTS matchmaking_queue (
+    player_id INTEGER PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+    level INTEGER,
+    status VARCHAR(20) DEFAULT 'searching',
+    battle_id INTEGER,
+    created_at TIMESTAMP DEFAULT NOW()
+  )
+`).catch(err => console.error('Matchmaking init:', err));
+
 // Таблица боёв
 pool.query(`
   CREATE TABLE IF NOT EXISTS battles (
@@ -592,6 +603,18 @@ app.post('/api/battle/invite', telegramAuth, playerAuth, async (req, res) => {
   if (!toId) return res.status(400).json({ error: 'Не указан игрок' });
 
   try {
+    // Проверка колоды у себя
+    const myDeck = await pool.query('SELECT count(*) FROM player_inventory WHERE player_id = $1 AND in_deck = TRUE', [req.player.id]);
+    if (parseInt(myDeck.rows[0].count) !== 12) {
+      return res.status(400).json({ error: 'У вас должно быть ровно 12 карт в колоде' });
+    }
+
+    // Проверка колоды у соперника
+    const oppDeck = await pool.query('SELECT count(*) FROM player_inventory WHERE player_id = $1 AND in_deck = TRUE', [toId]);
+    if (parseInt(oppDeck.rows[0].count) !== 12) {
+      return res.status(400).json({ error: 'У соперника не собрана колода (12 карт)' });
+    }
+
     const friendshipRes = await pool.query(`
       SELECT 1 FROM friendships
       WHERE status = 'accepted'
@@ -694,9 +717,64 @@ app.post('/api/battle/invite/decline', telegramAuth, playerAuth, async (req, res
   }
 });
 
-// Заглушка матчмейкинга
+// Матчмейкинг
 app.post('/api/battle/matchmaking', telegramAuth, playerAuth, async (req, res) => {
-  res.json({ success: true, message: 'Подбор соперника в разработке' });
+  try {
+    const myDeck = await pool.query('SELECT count(*) FROM player_inventory WHERE player_id = $1 AND in_deck = TRUE', [req.player.id]);
+    if (parseInt(myDeck.rows[0].count) !== 12) {
+      return res.status(400).json({ error: 'У вас должно быть ровно 12 карт в колоде' });
+    }
+
+    const myLevel = req.player.level || 1;
+    await pool.query(`DELETE FROM matchmaking_queue WHERE created_at < NOW() - INTERVAL '5 minutes'`);
+
+    const oppRes = await pool.query(`
+      SELECT player_id FROM matchmaking_queue
+      WHERE player_id != $1 AND status = 'searching'
+      ORDER BY ABS(level - $2) ASC LIMIT 1
+    `, [req.player.id, myLevel]);
+
+    if (oppRes.rows.length > 0) {
+      const oppId = oppRes.rows[0].player_id;
+      const oppDeck = await pool.query('SELECT count(*) FROM player_inventory WHERE player_id = $1 AND in_deck = TRUE', [oppId]);
+      if (parseInt(oppDeck.rows[0].count) !== 12) {
+        await pool.query(`DELETE FROM matchmaking_queue WHERE player_id = $1`, [oppId]);
+        return res.json({ success: true, searching: true });
+      }
+
+      const battleId = await createBattle(req.player.id, oppId);
+      await pool.query(`UPDATE matchmaking_queue SET status = 'matched', battle_id = $1 WHERE player_id IN ($2, $3)`, [battleId, req.player.id, oppId]);
+      return res.json({ success: true, battle_id: battleId });
+    } else {
+      await pool.query(`
+        INSERT INTO matchmaking_queue (player_id, level, status, battle_id, created_at)
+        VALUES ($1, $2, 'searching', NULL, NOW())
+        ON CONFLICT (player_id) DO UPDATE SET status = 'searching', created_at = NOW()
+      `, [req.player.id, myLevel]);
+      return res.json({ success: true, searching: true });
+    }
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/battle/matchmaking/status', telegramAuth, playerAuth, async (req, res) => {
+  try {
+    const result = await pool.query(`SELECT status, battle_id FROM matchmaking_queue WHERE player_id = $1`, [req.player.id]);
+    if (result.rows.length === 0) return res.json({ success: true, status: 'none' });
+
+    const row = result.rows[0];
+    if (row.status === 'matched') {
+      await pool.query(`DELETE FROM matchmaking_queue WHERE player_id = $1`, [req.player.id]);
+      return res.json({ success: true, status: 'matched', battle_id: row.battle_id });
+    }
+    res.json({ success: true, status: 'searching' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/battle/matchmaking/cancel', telegramAuth, playerAuth, async (req, res) => {
+  try {
+    await pool.query(`DELETE FROM matchmaking_queue WHERE player_id = $1 AND status = 'searching'`, [req.player.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ==================== БОЕВОЙ ДВИЖОК ====================
@@ -824,6 +902,43 @@ async function loadBattle(req, res, next) {
   } catch (err) { res.status(500).json({ error: err.message }); }
 }
 
+async function giveRewards(battle) {
+  if (battle.state.rewards_given) return;
+  battle.state.rewards_given = true;
+
+  const isDraw = battle.state.winner === null;
+  const p1Win = battle.state.winner === 'p1';
+  const p2Win = battle.state.winner === 'p2';
+
+  const calc = (isWinner) => {
+    if (isDraw) return { xp: 50, coins: 20, mana: 5 };
+    if (isWinner) return { xp: 100, coins: 50, mana: 10 };
+    return { xp: 30, coins: 10, mana: 2 };
+  };
+
+  const r1 = calc(p1Win);
+  const r2 = calc(p2Win);
+
+  try {
+    await pool.query('UPDATE players SET xp = xp + $1, coins = coins + $2, mana = mana + $3 WHERE id = $4', [r1.xp, r1.coins, r1.mana, battle.player1_id]);
+    await pool.query('UPDATE players SET xp = xp + $1, coins = coins + $2, mana = mana + $3 WHERE id = $4', [r2.xp, r2.coins, r2.mana, battle.player2_id]);
+
+    // 20% шанс пака на победу
+    if (p1Win && Math.random() < 0.2) {
+      r1.pack = true;
+      await pool.query('INSERT INTO player_inventory (player_id, card_id, is_new) SELECT $1, id, TRUE FROM cards ORDER BY RANDOM() LIMIT 1', [battle.player1_id]);
+    }
+    if (p2Win && Math.random() < 0.2) {
+      r2.pack = true;
+      await pool.query('INSERT INTO player_inventory (player_id, card_id, is_new) SELECT $1, id, TRUE FROM cards ORDER BY RANDOM() LIMIT 1', [battle.player2_id]);
+    }
+
+    battle.state.p1.rewards = r1;
+    battle.state.p2.rewards = r2;
+    battle.state.log.push('🎁 Награды начислены');
+  } catch (e) { console.error('Reward error:', e); }
+}
+
 async function saveBattleState(battle) {
   const winnerId = battle.state.winner === 'p1' ? battle.player1_id
                  : battle.state.winner === 'p2' ? battle.player2_id : null;
@@ -831,6 +946,10 @@ async function saveBattleState(battle) {
     'UPDATE battles SET state = $1, status = $2, winner_id = $3, updated_at = NOW() WHERE id = $4',
     [JSON.stringify(battle.state), battle.state.status, winnerId, battle.id]
   );
+
+  if (battle.state.status === 'finished') {
+    await giveRewards(battle);
+  }
 }
 
 // ==================== ЭФФЕКТЫ КАРТ ====================
@@ -881,13 +1000,13 @@ function healCard(card, amount) {
 
 function extraTurn(state, playerKey) {
   const p = state[playerKey];
-  p.energy = 10;
+  // НЕ трогаем энергию
   p.board.forEach(invId => {
     const c = state.cards[invId] || state.cards[String(invId)];
     if (c) c.hasAttacked = false;
   });
   state.turnStartedAt = Date.now();
-  state.log.push(`⏳ Временной скачок! Энергия восстановлена`);
+  state.log.push(`⏳ Временной скачок! Таймер хода обновлён, атаки разблокированы`);
 }
 
 function applyCardEffect(state, playerKey, oppKey, card, targetId) {

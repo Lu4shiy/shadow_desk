@@ -220,7 +220,15 @@ function isValidTarget(card, ownerKey) {
   const isFriendly = ownerKey === currentPlayerKey;
   if (targetMode === 'friendly' && !isFriendly) return false;
   if (targetMode === 'enemy' && isFriendly) return false;
-  if (targetMode === 'enemy' && UNTARGETABLE.includes(card.name)) return false;
+
+  if (targetMode === 'enemy') {
+    if (UNTARGETABLE.includes(card.name)) return false;
+    const pendingCard = currentBattleState.cards[pendingCardId] || currentBattleState.cards[String(pendingCardId)];
+    if (pendingCard && pendingCard.type === 'Негативная') {
+      const me = currentBattleState[currentPlayerKey];
+      if (card.immuneNegativeUntil && (me.turnNumber || 0) <= card.immuneNegativeUntil) return false;
+    }
+  }
   return true;
 }
 
@@ -282,8 +290,10 @@ function buildBoardHtml(boardInvIds, cards, ownerKey, otherKey, myTurn) {
     if (isSelected) cls.push('selected');
     if (!canAttack && c.hasAttacked && ownerKey === currentPlayerKey) cls.push('attacked');
     if (isEnemyTarget) cls.push('enemy-target');
+    
     if (targetMode) {
-      if (isTargetValid) cls.push(targetMode === 'friendly' ? 'target-friendly' : 'target-enemy');
+      if (isTargetValid) cls.push('target-valid');
+      else cls.push('target-invalid');
     }
 
     const imgUrl = cardImgUrl(c);
@@ -359,8 +369,14 @@ function renderHandSection(hand, cards, energy, myTurn, active) {
 // ==================== ДЕЙСТВИЯ ====================
 
 function onHandCardClick(invId) {
+  const me = currentBattleState[currentPlayerKey];
   const card = currentBattleState.cards[invId] || currentBattleState.cards[String(invId)];
   if (!card) return;
+
+  if (card.cost > me.energy) {
+    bShowToast('Недостаточно энергии');
+    return;
+  }
 
   // Если уже в target mode — отменяем и начинаем заново
   if (targetMode) { cancelTargetMode(); }
@@ -389,17 +405,11 @@ function onHandCardClick(invId) {
   showTargetHint(targetReq);
 }
 
-function showTargetHint(mode) {
-  const hint = document.getElementById('b-target-hint');
-  const sub = document.getElementById('b-target-sub');
-  sub.textContent = mode === 'friendly' ? 'Свой персонаж' : 'Персонаж противника';
-  hint.style.display = 'block';
-}
+// showTargetHint больше не нужна — цели подсвечиваются диммингом
 
 function cancelTargetMode() {
   pendingCardId = null;
   targetMode = null;
-  document.getElementById('b-target-hint').style.display = 'none';
   sectionHashes.oppBoard = '';
   sectionHashes.myBoard = '';
   if (currentBattleState) {
@@ -559,7 +569,9 @@ function handleSurrender() {
 function showBattleResult(kind) {
   const overlay = document.getElementById('b-result');
   const title = document.getElementById('b-result-title');
+  const rewardsEl = document.getElementById('b-rewards');
   overlay.classList.add('active');
+  
   if (kind === 'win') {
     title.textContent = '🏆 ПОБЕДА'; title.className = 'win';
     vibrate('heavy'); flashScreen('win');
@@ -569,6 +581,19 @@ function showBattleResult(kind) {
   } else {
     title.textContent = 'НИЧЬЯ'; title.className = 'draw';
     flashScreen('draw');
+  }
+
+  if (currentBattleState && currentBattleState[currentPlayerKey] && currentBattleState[currentPlayerKey].rewards) {
+    const r = currentBattleState[currentPlayerKey].rewards;
+    rewardsEl.innerHTML = `
+      <div>✨ Опыт: <span style="color:#f1c40f; float:right;">+${r.xp}</span></div>
+      <div>💰 Монеты: <span style="color:#f1c40f; float:right;">+${r.coins}</span></div>
+      <div>💧 Мана: <span style="color:#3498db; float:right;">+${r.mana}</span></div>
+      ${r.pack ? '<div style="color:#2ecc71; margin-top:5px;">🎁 Выпал пак с картой!</div>' : ''}
+    `;
+    rewardsEl.style.display = 'block';
+  } else {
+    rewardsEl.style.display = 'none';
   }
 }
 

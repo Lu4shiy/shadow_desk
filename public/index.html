@@ -201,7 +201,8 @@
     .hp-bar .hp-text { position: absolute; inset: 0; display: flex; justify-content: center; align-items: center;
       font-size: 10px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px #000; }
 
-    .b-field { flex: 1; display: flex; flex-direction: column; gap: 4px; min-height: 0; }
+    .b-field { flex: 1; display: flex; flex-direction: column; gap: 4px; min-height: 0; overflow: hidden; }
+    .b-board { flex-shrink: 0; }
     .b-board { display: flex; gap: 8px; justify-content: center; align-items: flex-start;
       min-height: 156px; padding: 8px; background: rgba(255,255,255,0.02);
       border-radius: 10px; border: 1px dashed #333; overflow-x: auto; overflow-y: hidden; flex-shrink: 0;
@@ -225,8 +226,8 @@
     .b-card-wrap.selected .b-card { border-color: #f1c40f; box-shadow: 0 0 16px #f1c40f; transform: translateY(-6px); }
     .b-card-wrap.attacked .b-card { opacity: 0.55; border-color: #444; }
     .b-card-wrap.enemy-target .b-card { border-color: #e74c3c; box-shadow: 0 0 12px rgba(231,76,60,0.7); }
-    .b-card-wrap.target-friendly .b-card { border-color: #2ecc71; box-shadow: 0 0 16px #2ecc71; cursor: crosshair; }
-    .b-card-wrap.target-enemy .b-card { border-color: #e74c3c; box-shadow: 0 0 16px #e74c3c; cursor: crosshair; }
+    .b-card-wrap.target-valid .b-card { border-color: #f1c40f; box-shadow: 0 0 16px #f1c40f; cursor: crosshair; }
+    .b-card-wrap.target-invalid .b-card { opacity: 0.3; filter: grayscale(100%); pointer-events: none; }
     .b-stats {
       font-size: 13px; font-weight: bold; text-align: center; white-space: nowrap;
       background: rgba(0,0,0,0.8); padding: 3px 10px; border-radius: 8px;
@@ -246,7 +247,7 @@
     #b-end-turn:disabled { opacity: 0.4; }
     #b-surrender { width: 36px; height: 36px; padding: 0; border-radius: 50%; background: #e74c3c;
       font-size: 16px; display: flex; justify-content: center; align-items: center;
-      flex-shrink: 0; box-shadow: 0 2px 8px rgba(231,76,60,0.5); }
+      flex-shrink: 0; box-shadow: 0 2px 8px rgba(231,76,60,0.5); z-index: 200; }
 
     /* Overlay переподключения соперника */
     #b-reconnect-overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.88);
@@ -261,7 +262,7 @@
       min-height: 180px; align-items: flex-end;
       user-select: none; -webkit-user-select: none;
       cursor: grab; scrollbar-width: thin; scroll-behavior: smooth;
-      touch-action: pan-x; }
+      touch-action: pan-x; flex-shrink: 0; z-index: 10; background: #121212; }
     .b-hand.dragging { cursor: grabbing; scroll-behavior: auto; }
     .b-hand::-webkit-scrollbar { height: 3px; }
     .b-hand::-webkit-scrollbar-thumb { background: #555; border-radius: 2px; }
@@ -599,7 +600,18 @@
 
     <div id="b-result" class="b-result">
       <h1 id="b-result-title">Победа!</h1>
+      <div id="b-rewards" style="display: none; background: rgba(0,0,0,0.5); padding: 15px 30px; border-radius: 12px; margin: 20px 0; font-size: 15px; line-height: 1.8; text-align: left;"></div>
       <button id="b-result-back" style="width: 220px;">Вернуться в меню</button>
+    </div>
+  </div>
+
+  <!-- Матчмейкинг -->
+  <div id="mm-modal" class="modal-overlay" style="z-index: 5500;">
+    <div class="modal-content" style="text-align: center;">
+      <div class="spinner" style="margin: 0 auto 20px;"></div>
+      <h3 style="margin-bottom: 10px;">Поиск соперника...</h3>
+      <p style="color: #aaa; margin-bottom: 20px; font-size: 14px;">Ищем игрока с ближайшим уровнем</p>
+      <button id="mm-cancel" class="btn-secondary" style="width: 100%; margin: 0;">Отмена</button>
     </div>
   </div>
 

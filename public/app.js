@@ -1082,13 +1082,51 @@ function startBattlePolling() {
 
 // ==================== ХУК В showMain ====================
 
+let mmPollTimer = null;
+
+function startMatchmakingPolling() {
+  if (mmPollTimer) clearInterval(mmPollTimer);
+  mmPollTimer = setInterval(async () => {
+    try {
+      const res = await apiFetch('/api/battle/matchmaking/status');
+      if (res.status === 'matched') {
+        clearInterval(mmPollTimer);
+        mmPollTimer = null;
+        document.getElementById('mm-modal').style.display = 'none';
+        if (window.joinBattle) window.joinBattle(res.battle_id);
+      } else if (res.status === 'none') {
+        // был удален из очереди (например, после 5 минут)
+        clearInterval(mmPollTimer);
+        mmPollTimer = null;
+        document.getElementById('mm-modal').style.display = 'none';
+        showToast('Поиск отменён');
+      }
+    } catch (e) { console.error(e); }
+  }, 2000);
+}
+
+document.getElementById('mm-cancel').onclick = async () => {
+  if (mmPollTimer) { clearInterval(mmPollTimer); mmPollTimer = null; }
+  document.getElementById('mm-modal').style.display = 'none';
+  try {
+    await apiFetch('/api/battle/matchmaking/cancel', { method: 'POST' });
+  } catch (e) {}
+};
+
 function bindBattleTab() {
   const matchBtn = document.getElementById('btn-matchmaking');
   if (matchBtn) {
     matchBtn.onclick = async () => {
       try {
         const res = await apiFetch('/api/battle/matchmaking', { method: 'POST' });
-        showToast(res.message || 'Подбор в разработке');
+        if (res.battle_id) {
+          if (window.joinBattle) window.joinBattle(res.battle_id);
+          return;
+        }
+        if (res.searching) {
+          document.getElementById('mm-modal').style.display = 'flex';
+          startMatchmakingPolling();
+        }
       } catch (err) { showToast(err.message); }
     };
   }
