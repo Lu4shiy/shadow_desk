@@ -743,8 +743,9 @@ async function loadInvites() {
       inList.querySelectorAll('.btn-accept-invite').forEach(btn => {
         btn.onclick = async () => {
           try {
-            await apiFetch('/api/battle/invite/accept', { method: 'POST', body: JSON.stringify({ invite_id: parseInt(btn.getAttribute('data-id')) }) });
-            showToast('Приглашение принято! Бой скоро начнётся...', true);
+            const res = await apiFetch('/api/battle/invite/accept', { method: 'POST', body: JSON.stringify({ invite_id: parseInt(btn.getAttribute('data-id')) }) });
+            showToast('Бой начинается!', true);
+            if (res.battle_id && window.joinBattle) window.joinBattle(res.battle_id);
             loadInvites();
           } catch (err) { showToast(err.message); }
         };
@@ -792,12 +793,13 @@ async function loadInvites() {
     if (data.ready_battles && data.ready_battles.length > 0) {
       const seen = JSON.parse(sessionStorage.getItem('seen_battles') || '[]');
       data.ready_battles.forEach(b => {
-        if (!seen.includes(b.id)) {
-          showToast(`${b.nickname} принял приглашение! Бой скоро начнётся...`, true);
+        if (!seen.includes(b.id) && b.battle_id) {
           seen.push(b.id);
+          sessionStorage.setItem('seen_battles', JSON.stringify(seen));
+          showToast(`${b.nickname} принял приглашение!`, true);
+          if (window.joinBattle) window.joinBattle(b.battle_id);
         }
       });
-      sessionStorage.setItem('seen_battles', JSON.stringify(seen));
     }
   } catch (err) { console.error('loadInvites:', err); }
 }

@@ -55,8 +55,26 @@ pool.query(`
     from_player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
     to_player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
     status VARCHAR(20) DEFAULT 'pending',
+    battle_id INTEGER,
     created_at TIMESTAMP DEFAULT NOW(),
     expires_at TIMESTAMP DEFAULT NOW() + INTERVAL '10 minutes'
+  )
+`).catch(err => console.error('DB Init Error:', err));
+
+// Миграция: стоимость карт
+pool.query(`ALTER TABLE cards ADD COLUMN IF NOT EXISTS cost INTEGER DEFAULT 1`).catch(()=>{});
+
+// Таблица боёв
+pool.query(`
+  CREATE TABLE IF NOT EXISTS battles (
+    id SERIAL PRIMARY KEY,
+    player1_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    player2_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    status VARCHAR(20) DEFAULT 'active',
+    winner_id INTEGER REFERENCES players(id),
+    state JSONB NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
   )
 `).catch(err => console.error('DB Init Error:', err));
 
@@ -515,7 +533,8 @@ app.get('/api/battle/invites', telegramAuth, playerAuth, async (req, res) => {
     `, [req.player.id]);
 
     const outgoing = await pool.query(`
-      SELECT bi.id, bi.to_player_id as player_id, bi.expires_at, bi.status, p.nickname, p.avatar_url, p.level
+      SELECT bi.id, bi.to_player_id as player_id, bi.expires_at, bi.status, bi.battle_id,
+             p.nickname, p.avatar_url, p.level
       FROM battle_invites bi
       JOIN players p ON bi.to_player_id = p.id
       WHERE bi.from_player_id = $1
@@ -546,7 +565,18 @@ app.post('/api/battle/invite/accept', telegramAuth, playerAuth, async (req, res)
       [invite_id, req.player.id]
     );
     if (result.rows.length === 0) return res.status(400).json({ error: 'Приглашение не найдено или истекло' });
-    res.json({ success: true, invite: result.rows[0] });
+
+    const invite = result.rows[0];
+    let battleId = null;
+    try {
+      battleId = await createBattle(invite.from_player_id, invite.to_player_id);
+      await pool.query('UPDATE battle_invites SET battle_id = $1 WHERE id = $2', [battleId, invite.id]);
+    } catch (e) {
+      await pool.query(`UPDATE battle_invites SET status = 'pending' WHERE id = $1`, [invite.id]);
+      return res.status(400).json({ error: e.message });
+    }
+
+    res.json({ success: true, invite, battle_id: battleId });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -570,6 +600,259 @@ app.post('/api/battle/invite/decline', telegramAuth, playerAuth, async (req, res
 // Заглушка матчмейкинга
 app.post('/api/battle/matchmaking', telegramAuth, playerAuth, async (req, res) => {
   res.json({ success: true, message: 'Подбор соперника в разработке' });
+});
+
+// ==================== БОЕВОЙ ДВИЖОК ====================
+
+function makeCardState(c) {
+  return {
+    invId: c.inv_id,
+    cardId: c.id,
+    name: c.name,
+    type: c.type,
+    rarity: c.rarity,
+    description: c.description,
+    image_url: c.image_url,
+    cost: c.cost || 1,
+    baseAtk: c.atk || 0,
+    baseArmor: c.armor || 0,
+    baseHp: c.hp || 0,
+    currentAtk: c.atk || 0,
+    currentArmor: c.armor || 0,
+    currentHp: c.hp || 0,
+    maxHp: c.hp || 0,
+    hasAttacked: false,
+    discarded: false
+  };
+}
+
+function startTurn(state, playerKey) {
+  const p = state[playerKey];
+  p.turnNumber++;
+  p.maxEnergy = Math.min(10, p.turnNumber + 1);
+  p.energy = p.maxEnergy;
+  p.board.forEach(invId => {
+    const c = state.cards[invId] || state.cards[String(invId)];
+    if (c) c.hasAttacked = false;
+  });
+  state.currentTurnPlayer = playerKey;
+  state.log.push(`Ход ${playerKey === 'p1' ? 'Игрока 1' : 'Игрока 2'} — энергия ${p.energy}`);
+  if (state.log.length > 30) state.log = state.log.slice(-30);
+}
+
+function applyDamage(card, dmg) {
+  let remaining = dmg;
+  if (card.currentArmor > 0) {
+    const absorbed = Math.min(card.currentArmor, remaining);
+    card.currentArmor -= absorbed;
+    remaining -= absorbed;
+  }
+  if (remaining > 0) card.currentHp -= remaining;
+}
+
+function checkBattleEnd(state) {
+  if (state.p1.hp <= 0 && state.p2.hp <= 0) { state.status = 'finished'; state.winner = null; }
+  else if (state.p1.hp <= 0) { state.status = 'finished'; state.winner = 'p2'; }
+  else if (state.p2.hp <= 0) { state.status = 'finished'; state.winner = 'p1'; }
+}
+
+async function createBattle(player1Id, player2Id) {
+  const [deckRes1, deckRes2, playersRes] = await Promise.all([
+    pool.query(`SELECT inv.id as inv_id, c.* FROM player_inventory inv
+                JOIN cards c ON inv.card_id = c.id
+                WHERE inv.player_id = $1 AND inv.in_deck = TRUE`, [player1Id]),
+    pool.query(`SELECT inv.id as inv_id, c.* FROM player_inventory inv
+                JOIN cards c ON inv.card_id = c.id
+                WHERE inv.player_id = $1 AND inv.in_deck = TRUE`, [player2Id]),
+    pool.query(`SELECT id, nickname, avatar_url, level FROM players WHERE id = ANY($1)`, [[player1Id, player2Id]])
+  ]);
+
+  const deck1 = deckRes1.rows, deck2 = deckRes2.rows;
+  if (deck1.length !== 12 || deck2.length !== 12) throw new Error('У обоих игроков должно быть по 12 карт в колоде');
+
+  const playerMap = Object.fromEntries(playersRes.rows.map(p => [p.id, p]));
+
+  const state = {
+    p1: { player: playerMap[player1Id], hp: 30, maxHp: 30, energy: 0, maxEnergy: 0, hand: [], board: [], turnNumber: 0 },
+    p2: { player: playerMap[player2Id], hp: 30, maxHp: 30, energy: 0, maxEnergy: 0, hand: [], board: [], turnNumber: 0 },
+    cards: {},
+    currentTurnPlayer: 'p1',
+    status: 'active',
+    winner: null,
+    log: []
+  };
+
+  deck1.forEach(c => { state.p1.hand.push(c.inv_id); state.cards[c.inv_id] = makeCardState(c); });
+  deck2.forEach(c => { state.p2.hand.push(c.inv_id); state.cards[c.inv_id] = makeCardState(c); });
+
+  startTurn(state, 'p1');
+
+  const result = await pool.query(
+    'INSERT INTO battles (player1_id, player2_id, state) VALUES ($1, $2, $3) RETURNING id',
+    [player1Id, player2Id, JSON.stringify(state)]
+  );
+  return result.rows[0].id;
+}
+
+async function loadBattle(req, res, next) {
+  const battleId = parseInt(req.params.id);
+  try {
+    const result = await pool.query('SELECT * FROM battles WHERE id = $1', [battleId]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Бой не найден' });
+    const battle = result.rows[0];
+    if (battle.player1_id !== req.player.id && battle.player2_id !== req.player.id) {
+      return res.status(403).json({ error: 'Вы не участвуете в этом бою' });
+    }
+    req.battle = battle;
+    req.playerKey = battle.player1_id === req.player.id ? 'p1' : 'p2';
+    req.oppKey = req.playerKey === 'p1' ? 'p2' : 'p1';
+    next();
+  } catch (err) { res.status(500).json({ error: err.message }); }
+}
+
+async function saveBattleState(battle) {
+  const winnerId = battle.state.winner === 'p1' ? battle.player1_id
+                 : battle.state.winner === 'p2' ? battle.player2_id : null;
+  await pool.query(
+    'UPDATE battles SET state = $1, status = $2, winner_id = $3, updated_at = NOW() WHERE id = $4',
+    [JSON.stringify(battle.state), battle.state.status, winnerId, battle.id]
+  );
+}
+
+// GET состояния боя (с фильтрацией руки соперника)
+app.get('/api/battle/:id', telegramAuth, playerAuth, loadBattle, (req, res) => {
+  const state = JSON.parse(JSON.stringify(req.battle.state));
+  const oppHand = state[req.oppKey].hand || [];
+  oppHand.forEach(id => { delete state.cards[id]; delete state.cards[String(id)]; });
+  state[req.oppKey].hand = [];
+  state[req.oppKey].handCount = oppHand.length;
+
+  res.json({
+    success: true,
+    battle: {
+      id: req.battle.id,
+      playerKey: req.playerKey,
+      status: req.battle.status,
+      winner_id: req.battle.winner_id,
+      state
+    }
+  });
+});
+
+// Разыграть карту
+app.post('/api/battle/:id/play', telegramAuth, playerAuth, loadBattle, async (req, res) => {
+  try {
+    const state = req.battle.state;
+    if (state.status !== 'active') return res.status(400).json({ error: 'Бой окончен' });
+    if (state.currentTurnPlayer !== req.playerKey) return res.status(400).json({ error: 'Не ваш ход' });
+
+    const p = state[req.playerKey];
+    const invId = parseInt(req.body.inv_id);
+    if (!p.hand.map(Number).includes(invId)) return res.status(400).json({ error: 'Карты нет в руке' });
+
+    const card = state.cards[invId] || state.cards[String(invId)];
+    if (!card) return res.status(400).json({ error: 'Карта не найдена' });
+    if (p.energy < card.cost) return res.status(400).json({ error: 'Недостаточно энергии' });
+
+    if (card.type === 'Персонаж' && p.board.length >= 6) {
+      return res.status(400).json({ error: 'На столе уже 6 персонажей' });
+    }
+
+    p.hand = p.hand.filter(id => Number(id) !== invId);
+    p.energy -= card.cost;
+
+    if (card.type === 'Персонаж') {
+      p.board.push(invId);
+      card.hasAttacked = true;
+      state.log.push(`${card.name} выставлен на стол`);
+    } else {
+      card.discarded = true;
+      state.log.push(`Сыграна карта: ${card.name} (эффект — в следующем обновлении)`);
+    }
+
+    await saveBattleState(req.battle);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Атака
+app.post('/api/battle/:id/attack', telegramAuth, playerAuth, loadBattle, async (req, res) => {
+  try {
+    const state = req.battle.state;
+    if (state.status !== 'active') return res.status(400).json({ error: 'Бой окончен' });
+    if (state.currentTurnPlayer !== req.playerKey) return res.status(400).json({ error: 'Не ваш ход' });
+
+    const p = state[req.playerKey], opp = state[req.oppKey];
+    const attackerId = parseInt(req.body.attacker_id);
+    const targetRaw = req.body.target_id;
+
+    const attacker = state.cards[attackerId] || state.cards[String(attackerId)];
+    if (!attacker || !p.board.map(Number).includes(attackerId)) {
+      return res.status(400).json({ error: 'Атакующий не на столе' });
+    }
+    if (attacker.hasAttacked) return res.status(400).json({ error: 'Эта карта уже атаковала' });
+    if (attacker.currentAtk <= 0) return res.status(400).json({ error: 'Нет атаки' });
+
+    if (targetRaw === 'player') {
+      if (opp.board.length > 0) return res.status(400).json({ error: 'Сначала убейте всех персонажей соперника' });
+      opp.hp -= attacker.currentAtk;
+      state.log.push(`${attacker.name} бьёт игрока на ${attacker.currentAtk}`);
+      attacker.hasAttacked = true;
+    } else {
+      const targetId = parseInt(targetRaw);
+      const target = state.cards[targetId] || state.cards[String(targetId)];
+      if (!target || !opp.board.map(Number).includes(targetId)) {
+        return res.status(400).json({ error: 'Цель не найдена' });
+      }
+
+      applyDamage(target, attacker.currentAtk);
+      applyDamage(attacker, target.currentAtk);
+      attacker.hasAttacked = true;
+
+      if (target.currentHp <= 0) {
+        opp.board = opp.board.filter(id => Number(id) !== targetId);
+        target.discarded = true;
+        state.log.push(`${target.name} погибает`);
+      }
+      if (attacker.currentHp <= 0) {
+        p.board = p.board.filter(id => Number(id) !== attackerId);
+        attacker.discarded = true;
+        state.log.push(`${attacker.name} погибает`);
+      }
+    }
+
+    checkBattleEnd(state);
+    await saveBattleState(req.battle);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Конец хода
+app.post('/api/battle/:id/end-turn', telegramAuth, playerAuth, loadBattle, async (req, res) => {
+  try {
+    const state = req.battle.state;
+    if (state.status !== 'active') return res.status(400).json({ error: 'Бой окончен' });
+    if (state.currentTurnPlayer !== req.playerKey) return res.status(400).json({ error: 'Не ваш ход' });
+
+    startTurn(state, req.oppKey);
+    await saveBattleState(req.battle);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Сдаться
+app.post('/api/battle/:id/surrender', telegramAuth, playerAuth, loadBattle, async (req, res) => {
+  try {
+    const state = req.battle.state;
+    if (state.status !== 'active') return res.status(400).json({ error: 'Бой уже окончен' });
+
+    state.status = 'finished';
+    state.winner = req.oppKey;
+    state[req.playerKey].hp = 0;
+    state.log.push(`${req.playerKey === 'p1' ? 'Игрок 1' : 'Игрок 2'} сдался`);
+    await saveBattleState(req.battle);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
