@@ -65,6 +65,24 @@ pool.query(`
 pool.query(`ALTER TABLE battle_invites ADD COLUMN IF NOT EXISTS battle_id INTEGER`)
   .catch(err => console.error('Migration Error battle_id:', err));
 
+// Миграция: стоимости карт по редкости (если все ещё дефолтные)
+(async () => {
+  try {
+    await pool.query(`ALTER TABLE cards ADD COLUMN IF NOT EXISTS cost INTEGER DEFAULT 1`);
+    await pool.query(`
+      UPDATE cards SET cost = CASE
+        WHEN rarity = 'grey' THEN 1
+        WHEN rarity = 'purple' THEN 2
+        WHEN rarity = 'orange' THEN 3
+        WHEN rarity = 'blue' THEN 4
+        WHEN rarity = 'gold' THEN 5
+        ELSE 2
+      END
+      WHERE cost = 1 AND rarity != 'grey'
+    `);
+  } catch (e) { console.error('Cost migration:', e); }
+})();
+
 // Миграция: стоимость карт
 pool.query(`ALTER TABLE cards ADD COLUMN IF NOT EXISTS cost INTEGER DEFAULT 1`).catch(()=>{});
 
@@ -290,13 +308,13 @@ app.post('/api/deck/toggle', telegramAuth, playerAuth, async (req, res) => {
   }
 });
 
-// Открыть платный кейс (100 монет, 3 карты)
+// Открыть платный кейс (100 монет, 3 карты, без дубликатов)
 const PACK_COST = 100;
 const PACK_SIZE = 3;
 
 app.post('/api/shop/open', telegramAuth, playerAuth, async (req, res) => {
   try {
-    // 1. Атомарно списываем монеты (защита от двойного клика)
+    // 1. Атомарно списываем монеты
     const deductRes = await pool.query(
       'UPDATE players SET coins = coins - $1 WHERE id = $2 AND coins >= $1 RETURNING coins',
       [PACK_COST, req.player.id]
@@ -305,9 +323,14 @@ app.post('/api/shop/open', telegramAuth, playerAuth, async (req, res) => {
       return res.status(400).json({ error: `Недостаточно монет (нужно ${PACK_COST})` });
     }
 
-    // 2. Генерируем 3 карты
+    // 2. Генерируем 3 УНИКАЛЬНЫЕ карты
     const cards = [];
-    for (let i = 0; i < PACK_SIZE; i++) {
+    const usedCardIds = new Set();
+    let safetyCounter = 0;
+
+    while (cards.length < PACK_SIZE && safetyCounter < 30) {
+      safetyCounter++;
+
       const roll = Math.random() * 100;
       let rarity = 'grey';
       if (roll < 0.13) rarity = 'gold';
@@ -315,20 +338,30 @@ app.post('/api/shop/open', telegramAuth, playerAuth, async (req, res) => {
       else if (roll < 12.84) rarity = 'orange';
       else if (roll < 31.48) rarity = 'purple';
 
+      // Исключаем уже выпавшие карты
       let cardResult = await pool.query(
-        'SELECT * FROM cards WHERE rarity = $1 ORDER BY RANDOM() LIMIT 1', [rarity]
+        `SELECT * FROM cards WHERE rarity = $1
+         AND id <> ALL($2::int[])
+         ORDER BY RANDOM() LIMIT 1`,
+        [rarity, Array.from(usedCardIds)]
       );
       if (cardResult.rows.length === 0) {
-        cardResult = await pool.query('SELECT * FROM cards ORDER BY RANDOM() LIMIT 1');
-      }
-      const card = cardResult.rows[0];
-      if (card) {
-        await pool.query(
-          'INSERT INTO player_inventory (player_id, card_id, is_new) VALUES ($1, $2, TRUE)',
-          [req.player.id, card.id]
+        // Fallback: любая не выпавшая карта
+        cardResult = await pool.query(
+          `SELECT * FROM cards WHERE id <> ALL($1::int[]) ORDER BY RANDOM() LIMIT 1`,
+          [Array.from(usedCardIds)]
         );
-        cards.push(card);
       }
+      if (cardResult.rows.length === 0) break;
+
+      const card = cardResult.rows[0];
+      usedCardIds.add(card.id);
+      cards.push(card);
+
+      await pool.query(
+        'INSERT INTO player_inventory (player_id, card_id, is_new) VALUES ($1, $2, TRUE)',
+        [req.player.id, card.id]
+      );
     }
 
     res.json({
@@ -653,8 +686,10 @@ function makeCardState(c) {
 function startTurn(state, playerKey) {
   const p = state[playerKey];
   p.turnNumber++;
-  p.maxEnergy = Math.min(10, p.turnNumber + 1);
-  p.energy = p.maxEnergy;
+  p.maxEnergy = 10;
+  // Каждый ход: +1 энергия (не полный рефреш), кап 10
+  const prev = Number.isFinite(p.energy) ? p.energy : 0;
+  p.energy = Math.min(10, prev + 1);
   p.board.forEach(invId => {
     const c = state.cards[invId] || state.cards[String(invId)];
     if (c) c.hasAttacked = false;
@@ -698,8 +733,8 @@ async function createBattle(player1Id, player2Id) {
   const playerMap = Object.fromEntries(playersRes.rows.map(p => [p.id, p]));
 
   const state = {
-    p1: { player: playerMap[player1Id], hp: 30, maxHp: 30, energy: 0, maxEnergy: 0, hand: [], board: [], turnNumber: 0 },
-    p2: { player: playerMap[player2Id], hp: 30, maxHp: 30, energy: 0, maxEnergy: 0, hand: [], board: [], turnNumber: 0 },
+    p1: { player: playerMap[player1Id], hp: 30, maxHp: 30, energy: 10, maxEnergy: 10, hand: [], board: [], turnNumber: 0 },
+    p2: { player: playerMap[player2Id], hp: 30, maxHp: 30, energy: 10, maxEnergy: 10, hand: [], board: [], turnNumber: 0 },
     cards: {},
     currentTurnPlayer: 'p1',
     status: 'active',
@@ -849,19 +884,14 @@ app.post('/api/battle/:id/attack', telegramAuth, playerAuth, loadBattle, async (
         return res.status(400).json({ error: 'Цель не найдена' });
       }
 
+      // Атакующий наносит урон, но сам не получает (нет контратаки)
       applyDamage(target, attacker.currentAtk);
-      applyDamage(attacker, target.currentAtk);
       attacker.hasAttacked = true;
 
       if (target.currentHp <= 0) {
         opp.board = opp.board.filter(id => Number(id) !== targetId);
         target.discarded = true;
         state.log.push(`${target.name} погибает`);
-      }
-      if (attacker.currentHp <= 0) {
-        p.board = p.board.filter(id => Number(id) !== attackerId);
-        attacker.discarded = true;
-        state.log.push(`${attacker.name} погибает`);
       }
     }
 

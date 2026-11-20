@@ -270,6 +270,15 @@ function showMain(profile) {
           return;
         }
 
+        // === ПРЕДЗАГРУЗКА ВСЕХ КАРТ (без показа) ===
+        await Promise.all(cards.map(card => new Promise(resolve => {
+          if (!card.image_url) return resolve();
+          const img = new Image();
+          img.onload = resolve;
+          img.onerror = resolve;
+          img.src = `/img/cards/${card.image_url}`;
+        })));
+
         const packModal = document.getElementById('pack-modal');
         const packWrapper = document.getElementById('pack-wrapper');
         const packTop = document.getElementById('pack-top');
@@ -295,7 +304,7 @@ function showMain(profile) {
         let packIndex = 0;
         const totalCards = cards.length;
 
-        // Свайп крышки пака
+        // Свайп крышки
         let startX = 0, currentX = 0, isDragging = false;
         const onDragStart = (e) => {
           isDragging = true;
@@ -319,7 +328,7 @@ function showMain(profile) {
           if (diff > 60) {
             packTop.style.transform = 'translateX(300px) rotate(20deg)';
             packTop.style.opacity = '0';
-            setTimeout(buildStack, 250);
+            setTimeout(buildCardView, 250);
           } else {
             packTop.style.transform = 'translateX(0) rotate(0deg)';
           }
@@ -338,36 +347,65 @@ function showMain(profile) {
           document.addEventListener('touchend', onDragEnd);
         };
 
-        // Все карты грузятся одновременно в стеке
-        function buildStack() {
+        // === ОДНА карта в DOM. Никаких спойлеров ===
+        function buildCardView() {
           packWrapper.style.display = 'none';
           packTitle.style.display = 'none';
           packResult.style.display = 'flex';
-          stackEl.innerHTML = '';
           packIndex = 0;
 
-          cards.forEach((card, idx) => {
-            const imgHtml = card.image_url
-              ? `<img src="/img/cards/${card.image_url}" draggable="false" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:12px;display:block;pointer-events:none;user-select:none;-webkit-user-drag:none;" />`
-              : `<div style="background:url('/img/card_template_${card.rarity}.png') center/100% 100%;width:100%;height:100%;display:flex;justify-content:center;align-items:center;border-radius:12px;"><div style="background:rgba(0,0,0,0.8);padding:10px;border-radius:8px;font-weight:bold;">${card.name}</div></div>`;
-
-            const el = document.createElement('div');
-            el.className = 'pack-stack-card';
-            el.dataset.idx = idx;
-            el.style.cssText = `
+          stackEl.innerHTML = `
+            <div id="pack-current-card" style="
               position: absolute; inset: 0; border-radius: 12px; overflow: hidden;
-              z-index: ${totalCards - idx};
-              transform: ${idx === 0 ? 'translateY(0) scale(1)' : `translateY(${idx * 6}px) scale(${1 - idx * 0.03})`};
-              transition: transform 0.3s ease-out, opacity 0.3s ease-out;
-              will-change: transform, opacity;
-              user-select: none; -webkit-user-select: none; -webkit-user-drag: none;
-            `;
-            el.innerHTML = imgHtml;
-            stackEl.appendChild(el);
-          });
-
+              will-change: transform, opacity; user-select: none; -webkit-user-select: none;
+            "></div>
+          `;
+          renderCurrentCard(false);
           renderDots();
-          bindTopCardSwipe();
+          bindCurrentCardSwipe();
+        }
+
+        function cardHtml(card) {
+          if (card.image_url) {
+            return `<img src="/img/cards/${card.image_url}" draggable="false" alt="" style="
+              width:100%;height:100%;object-fit:cover;display:block;
+              pointer-events:none;user-select:none;-webkit-user-drag:none;
+            " />`;
+          }
+          return `<div style="
+            background:url('/img/card_template_${card.rarity}.png') center/100% 100%;
+            width:100%;height:100%;display:flex;justify-content:center;align-items:center;border-radius:12px;">
+            <div style="background:rgba(0,0,0,0.8);padding:10px;border-radius:8px;font-weight:bold;">${card.name}</div>
+          </div>`;
+        }
+
+        // Показать текущую карту. isTransition=true — с fade-in снизу.
+        function renderCurrentCard(isTransition) {
+          const el = document.getElementById('pack-current-card');
+          if (!el) return;
+          const card = cards[packIndex];
+
+          if (!isTransition) {
+            el.style.transition = 'none';
+            el.style.transform = 'translateY(0) scale(1)';
+            el.style.opacity = '1';
+            el.innerHTML = cardHtml(card);
+            return;
+          }
+
+          // Появление снизу
+          el.style.transition = 'none';
+          el.style.transform = 'translateY(20%) scale(0.9)';
+          el.style.opacity = '0';
+          el.innerHTML = cardHtml(card);
+
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              el.style.transition = 'transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.25s';
+              el.style.transform = 'translateY(0) scale(1)';
+              el.style.opacity = '1';
+            });
+          });
         }
 
         function renderDots() {
@@ -378,9 +416,9 @@ function showMain(profile) {
           dotsEl.innerHTML = html;
         }
 
-        function bindTopCardSwipe() {
-          const topCard = stackEl.querySelector(`.pack-stack-card[data-idx="${packIndex}"]`);
-          if (!topCard) return;
+        function bindCurrentCardSwipe() {
+          const el = document.getElementById('pack-current-card');
+          if (!el) return;
 
           let sY = 0, cY = 0, drag = false;
 
@@ -389,15 +427,15 @@ function showMain(profile) {
             drag = true;
             sY = e.touches ? e.touches[0].clientY : e.clientY;
             cY = sY;
-            topCard.style.transition = 'none';
+            el.style.transition = 'none';
           };
           const onMove = (e) => {
             if (!drag) return;
             cY = e.touches ? e.touches[0].clientY : e.clientY;
             const diff = cY - sY;
             if (diff < 0) {
-              topCard.style.transform = `translateY(${diff}px) scale(${1 + diff / 2000})`;
-              topCard.style.opacity = String(Math.max(0, 1 + diff / 500));
+              el.style.transform = `translateY(${diff}px) scale(${1 + diff / 3000})`;
+              el.style.opacity = String(Math.max(0, 1 + diff / 400));
             }
           };
           const onEnd = () => {
@@ -408,45 +446,42 @@ function showMain(profile) {
             document.removeEventListener('mouseup', onEnd);
             document.removeEventListener('touchmove', onMove);
             document.removeEventListener('touchend', onEnd);
-            topCard.style.transition = 'transform 0.3s ease-out, opacity 0.3s ease-out';
 
             if (diff < -80) {
-              topCard.style.transform = 'translateY(-150%) scale(0.7)';
-              topCard.style.opacity = '0';
-              topCard.style.pointerEvents = 'none';
+              // Улетает вверх
+              el.style.transition = 'transform 0.28s ease-out, opacity 0.28s ease-out';
+              el.style.transform = 'translateY(-150%) scale(0.7)';
+              el.style.opacity = '0';
+
               setTimeout(() => {
                 packIndex++;
-                stackEl.querySelectorAll('.pack-stack-card').forEach((el) => {
-                  const logicalIdx = parseInt(el.dataset.idx);
-                  const newRel = logicalIdx - packIndex;
-                  if (newRel < 0) return;
-                  el.style.transform = newRel === 0
-                    ? 'translateY(0) scale(1)'
-                    : `translateY(${newRel * 6}px) scale(${1 - newRel * 0.03})`;
-                });
                 renderDots();
 
                 if (packIndex >= totalCards - 1) {
                   swipeHint.style.display = 'none';
                   closeBtn.style.display = 'block';
                   loadInventory();
-                } else {
-                  bindTopCardSwipe();
                 }
-              }, 310);
+
+                if (packIndex < totalCards) {
+                  renderCurrentCard(true);
+                  bindCurrentCardSwipe();
+                }
+              }, 300);
             } else {
-              topCard.style.transform = 'translateY(0) scale(1)';
-              topCard.style.opacity = '1';
+              el.style.transition = 'transform 0.2s ease-out, opacity 0.2s';
+              el.style.transform = 'translateY(0) scale(1)';
+              el.style.opacity = '1';
             }
             sY = 0; cY = 0;
           };
 
-          topCard.onmousedown = (e) => {
+          el.onmousedown = (e) => {
             onStart(e);
             document.addEventListener('mousemove', onMove);
             document.addEventListener('mouseup', onEnd);
           };
-          topCard.ontouchstart = (e) => {
+          el.ontouchstart = (e) => {
             onStart(e);
             document.addEventListener('touchmove', onMove, { passive: false });
             document.addEventListener('touchend', onEnd);
