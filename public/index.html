@@ -215,7 +215,7 @@
 
     .b-card-wrap { display: flex; flex-direction: column; align-items: center; gap: 3px; flex-shrink: 0; }
     .b-card {
-      width: 130px; height: 162px;
+      width: 140px; height: 175px;
       border-radius: 8px; overflow: hidden; cursor: pointer;
       border: 2px solid #555; box-shadow: 0 3px 8px rgba(0,0,0,0.6);
       transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
@@ -225,10 +225,12 @@
     .b-card-wrap.selected .b-card { border-color: #f1c40f; box-shadow: 0 0 16px #f1c40f; transform: translateY(-6px); }
     .b-card-wrap.attacked .b-card { opacity: 0.55; border-color: #444; }
     .b-card-wrap.enemy-target .b-card { border-color: #e74c3c; box-shadow: 0 0 12px rgba(231,76,60,0.7); }
+    .b-card-wrap.target-friendly .b-card { border-color: #2ecc71; box-shadow: 0 0 16px #2ecc71; cursor: crosshair; }
+    .b-card-wrap.target-enemy .b-card { border-color: #e74c3c; box-shadow: 0 0 16px #e74c3c; cursor: crosshair; }
     .b-stats {
-      font-size: 12px; font-weight: bold; text-align: center; white-space: nowrap;
-      background: rgba(0,0,0,0.7); padding: 2px 8px; border-radius: 6px;
-      display: flex; gap: 6px; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: bold; text-align: center; white-space: nowrap;
+      background: rgba(0,0,0,0.8); padding: 3px 10px; border-radius: 8px;
+      display: flex; gap: 8px; align-items: center; justify-content: center;
     }
     .b-stats .atk { color: #e74c3c; }
     .b-stats .hp { color: #2ecc71; }
@@ -263,25 +265,17 @@
     .b-hand.dragging { cursor: grabbing; scroll-behavior: auto; }
     .b-hand::-webkit-scrollbar { height: 3px; }
     .b-hand::-webkit-scrollbar-thumb { background: #555; border-radius: 2px; }
-    .hand-card-wrap { display: flex; flex-direction: column; align-items: center; gap: 3px; flex-shrink: 0; }
+    .hand-card-wrap { display: flex; flex-direction: column; align-items: center; flex-shrink: 0; }
     .hand-card {
-      width: 138px; height: 172px;
-      border-radius: 7px; overflow: hidden; cursor: pointer;
+      width: 140px; height: 175px;
+      border-radius: 8px; overflow: hidden; cursor: pointer;
       border: 2px solid #444; transition: transform 0.1s;
       user-select: none; -webkit-user-select: none; -webkit-user-drag: none;
     }
     .hand-card img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
     .hand-card-wrap:active .hand-card { transform: scale(0.96); }
-    .hand-card-wrap.playable .hand-card { border-color: #2ecc71; box-shadow: 0 0 10px rgba(46,204,113,0.5); }
+    .hand-card-wrap.playable .hand-card { border-color: #2ecc71; box-shadow: 0 0 12px rgba(46,204,113,0.5); }
     .hand-card-wrap.not-playable .hand-card { opacity: 0.45; }
-    .h-stats {
-      font-size: 11px; font-weight: bold; text-align: center; white-space: nowrap;
-      background: rgba(0,0,0,0.7); padding: 2px 8px; border-radius: 6px;
-      display: flex; gap: 6px;
-    }
-    .h-stats .atk { color: #e74c3c; }
-    .h-stats .hp { color: #2ecc71; }
-    .h-stats .cost { color: #3498db; }
 
     .b-turn-badge { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0.8);
       font-family: 'Cinzel', serif; font-size: 22px; color: #f1c40f; text-shadow: 0 0 20px #f1c40f;
@@ -590,6 +584,12 @@
     <div id="b-hand" class="b-hand"></div>
 
 
+
+    <div id="b-target-hint" style="display:none; position:absolute; left:50%; bottom:200px; transform:translateX(-50%); z-index:90; background:rgba(0,0,0,0.92); padding:12px 18px; border-radius:12px; border:2px solid #f1c40f; text-align:center;">
+      <div style="font-size:13px; font-weight:bold; color:#f1c40f; margin-bottom:6px;">Выберите цель</div>
+      <div id="b-target-sub" style="font-size:11px; color:#aaa; margin-bottom:8px;">Свой персонаж</div>
+      <button id="b-target-cancel" style="padding:6px 16px; font-size:12px; width:auto; background:#e74c3c;">Отмена</button>
+    </div>
 
     <div id="b-reconnect-overlay">
       <div id="b-reconnect-title">Соперник переподключается…</div>

@@ -7,13 +7,14 @@ let currentOppDiscSec = 0;
 let battlePollTimer = null;
 let turnTimerInterval = null;
 let selectedAttacker = null;
+let pendingCardId = null;
+let targetMode = null;
 let isActionInProgress = false;
 let fetchGen = 0;
 let lastAppliedGen = 0;
 
 let prevSnapshot = null;
-let oppDisconnectedSince = null; // ЛОКАЛЬНЫЙ timestamp первого обнаружения офлайна
-
+let oppDisconnectedSince = null;
 let sectionHashes = { oppHeader: '', myHeader: '', oppBoard: '', myBoard: '', hand: '' };
 
 let handPointerDown = false;
@@ -21,30 +22,36 @@ let handWasDragged = false;
 let handStartX = 0;
 let handStartScroll = 0;
 
-const OPP_DISC_THRESHOLD = 4; // сек — после какого офлайна показывать overlay
-const OPP_DISC_LIMIT = 60;    // сек — сколько ждём соперника
+const OPP_DISC_THRESHOLD = 4;
+const OPP_DISC_LIMIT = 60;
+
+const CARD_TARGETS = {
+  'Каменная кожа': 'friendly',
+  'Отравленный клинок': 'enemy',
+  'Тёмный жрец': 'friendly',
+  'Проклятие слабости': 'enemy',
+  'Исцеляющий отвар': 'friendly',
+  'Теневой сгусток': 'enemy',
+  'Вампирский укус': 'enemy',
+  'Тёмное благословение': 'friendly',
+  'Удар души': 'enemy',
+  'Зеркальное отражение': 'friendly',
+  'Падающая звезда': 'enemy',
+};
+
+const UNTARGETABLE = ['Дракон Бездны', 'Единорог'];
 
 function bShowToast(msg, ok = false) {
+  if (/не ваш ход|не твой ход|ваш ход|твой ход/i.test(msg)) return;
   if (typeof showToast === 'function') showToast(msg, ok);
 }
 
 // ==================== ВИБРАЦИЯ ====================
 function vibrate(kind) {
-  // Визуальный флэш при тяжёлом уроне (работает везде, включая десктоп)
-  if (kind === 'heavy') {
-    const flash = document.getElementById('damage-flash');
-    if (flash) {
-      flash.style.opacity = '1';
-      setTimeout(() => { flash.style.opacity = '0'; }, 150);
-    }
-  }
-
-  // Telegram HapticFeedback (мобильный Telegram)
   try {
     const tg = window.Telegram?.WebApp;
     if (tg?.HapticFeedback) {
-      const styleMap = { light: 'light', medium: 'medium', heavy: 'heavy' };
-      const style = styleMap[kind] || 'medium';
+      const style = kind === 'heavy' ? 'heavy' : kind === 'medium' ? 'medium' : 'light';
       try { tg.HapticFeedback.impactOccurred(style); } catch (e) {}
       if (kind === 'heavy') {
         try { tg.HapticFeedback.notificationOccurred('error'); } catch (e) {}
@@ -54,14 +61,31 @@ function vibrate(kind) {
       return;
     }
   } catch (e) {}
-
-  // Fallback — обычный браузер
   try {
     if (navigator.vibrate) {
       const patterns = { light: 20, medium: [30, 20, 30], heavy: [80, 40, 80] };
       navigator.vibrate(patterns[kind] || [40]);
     }
   } catch (e) {}
+}
+
+function flashScreen(color) {
+  const flash = document.getElementById('damage-flash');
+  if (!flash) return;
+  const map = {
+    win: 'rgba(46,204,113,0.7)',
+    lose: 'rgba(231,76,60,0.7)',
+    draw: 'rgba(155,89,182,0.6)',
+    damage: 'rgba(231,76,60,0.6)'
+  };
+  const c = map[color] || map.damage;
+  flash.style.background = `radial-gradient(circle, transparent 30%, ${c} 100%)`;
+  flash.style.transition = 'opacity 0.1s';
+  flash.style.opacity = '1';
+  setTimeout(() => {
+    flash.style.transition = 'opacity 0.4s';
+    flash.style.opacity = '0';
+  }, 100);
 }
 
 // ==================== ЖИЗНЕННЫЙ ЦИКЛ ====================
@@ -74,13 +98,14 @@ function joinBattle(battleId) {
   currentOppDiscSec = 0;
   oppDisconnectedSince = null;
   selectedAttacker = null;
+  pendingCardId = null;
+  targetMode = null;
   isActionInProgress = false;
   fetchGen = 0;
   lastAppliedGen = 0;
   prevSnapshot = null;
   sectionHashes = { oppHeader: '', myHeader: '', oppBoard: '', myBoard: '', hand: '' };
 
-  // Очистка прошлого боя
   document.getElementById('b-opp-board').innerHTML = '<div class="b-board-empty">Загрузка...</div>';
   document.getElementById('b-my-board').innerHTML = '<div class="b-board-empty">Загрузка...</div>';
   document.getElementById('b-hand').innerHTML = '';
@@ -96,17 +121,18 @@ function joinBattle(battleId) {
   const myAv = document.getElementById('b-my-avatar'); if (myAv) myAv.src = '';
   document.getElementById('b-result').classList.remove('active');
   document.getElementById('b-reconnect-overlay').classList.remove('active');
+  document.getElementById('b-target-hint').style.display = 'none';
 
   document.getElementById('battle-screen').classList.add('active');
 
   fetchBattleState();
   if (battlePollTimer) clearInterval(battlePollTimer);
-  battlePollTimer = setInterval(fetchBattleState, 1000); // ← каждую 1 сек
+  battlePollTimer = setInterval(fetchBattleState, 1000);
 
   if (turnTimerInterval) clearInterval(turnTimerInterval);
   turnTimerInterval = setInterval(() => {
     updateTimerDisplay();
-    updateReconnectOverlayTick(); // ← локальный тик 500мс
+    updateReconnectOverlayTick();
   }, 500);
 }
 
@@ -116,12 +142,15 @@ function leaveBattle() {
   document.getElementById('battle-screen').classList.remove('active');
   document.getElementById('b-result').classList.remove('active');
   document.getElementById('b-reconnect-overlay').classList.remove('active');
+  document.getElementById('b-target-hint').style.display = 'none';
   currentBattleId = null;
   currentBattleState = null;
   currentPlayerKey = null;
   currentOppDiscSec = 0;
   oppDisconnectedSince = null;
   selectedAttacker = null;
+  pendingCardId = null;
+  targetMode = null;
   prevSnapshot = null;
   if (typeof window.checkActiveBattle === 'function') window.checkActiveBattle();
 }
@@ -150,7 +179,6 @@ async function fetchBattleState() {
   }
 }
 
-// ==================== ВИБРАЦИЯ ПО ДИФФУ ====================
 function detectFeedback() {
   const st = currentBattleState;
   if (!st) return;
@@ -166,14 +194,12 @@ function detectFeedback() {
 
   if (prevSnapshot) {
     let playerDamaged = false, characterDied = false;
-
     if (snap.myHp < prevSnapshot.myHp) playerDamaged = true;
     if (snap.oppHp < prevSnapshot.oppHp) playerDamaged = true;
-
     prevSnapshot.myBoard.forEach(id => { if (!snap.myBoard.has(id)) characterDied = true; });
     prevSnapshot.oppBoard.forEach(id => { if (!snap.oppBoard.has(id)) characterDied = true; });
 
-    if (playerDamaged) vibrate('heavy');
+    if (playerDamaged) { vibrate('heavy'); flashScreen('damage'); }
     else if (characterDied) vibrate('medium');
   }
   prevSnapshot = snap;
@@ -181,15 +207,21 @@ function detectFeedback() {
 
 // ==================== УТИЛИТЫ ====================
 
-function cardImgUrl(card) {
-  if (card.image_url) return `/img/cards/${card.image_url}`;
-  return null;
-}
+function cardImgUrl(card) { return card.image_url ? `/img/cards/${card.image_url}` : null; }
 
 function hashStr(s) {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
   return h;
+}
+
+function isValidTarget(card, ownerKey) {
+  if (!targetMode) return false;
+  const isFriendly = ownerKey === currentPlayerKey;
+  if (targetMode === 'friendly' && !isFriendly) return false;
+  if (targetMode === 'enemy' && isFriendly) return false;
+  if (targetMode === 'enemy' && UNTARGETABLE.includes(card.name)) return false;
+  return true;
 }
 
 // ==================== РЕНДЕР ====================
@@ -243,12 +275,16 @@ function buildBoardHtml(boardInvIds, cards, ownerKey, otherKey, myTurn) {
     const canAttack = ownerKey === currentPlayerKey && myTurn && !c.hasAttacked && c.currentAtk > 0 && !c.discarded;
     const isSelected = selectedAttacker === Number(invId);
     const isEnemyTarget = otherKey === currentPlayerKey && selectedAttacker !== null && ownerKey !== currentPlayerKey;
+    const isTargetValid = isValidTarget(c, ownerKey);
 
     const cls = ['b-card-wrap'];
     if (canAttack) cls.push('can-attack');
     if (isSelected) cls.push('selected');
     if (!canAttack && c.hasAttacked && ownerKey === currentPlayerKey) cls.push('attacked');
     if (isEnemyTarget) cls.push('enemy-target');
+    if (targetMode) {
+      if (isTargetValid) cls.push(targetMode === 'friendly' ? 'target-friendly' : 'target-enemy');
+    }
 
     const imgUrl = cardImgUrl(c);
     const img = imgUrl
@@ -292,14 +328,10 @@ function buildHandHtml(hand, cards, energy, myTurn, active) {
       ? `<img src="${imgUrl}" alt="" draggable="false" />`
       : `<div style="width:100%;height:100%;background:#222;display:flex;justify-content:center;align-items:center;font-size:10px;text-align:center;padding:4px;">${c.name}</div>`;
 
-    const statsHtml = c.type === 'Персонаж'
-      ? `<div class="h-stats"><span class="atk">⚔${c.baseAtk}</span><span class="hp">❤${c.baseHp}</span></div>`
-      : `<div class="h-stats"><span class="cost">⚡${c.cost}</span></div>`;
-
+    // НЕТ статов под картой в руке — они уже на картинке
     return `
       <div class="hand-card-wrap ${playable ? 'playable' : 'not-playable'}" data-inv="${invId}">
         <div class="hand-card">${img}</div>
-        ${statsHtml}
       </div>
     `;
   }).join('');
@@ -319,25 +351,89 @@ function renderHandSection(hand, cards, energy, myTurn, active) {
       const invId = parseInt(el.dataset.inv);
       if (!currentBattleState || currentBattleState.status !== 'active') return;
       if (currentBattleState.currentTurnPlayer !== currentPlayerKey) return;
-      playCard(invId);
+      onHandCardClick(invId);
     };
   });
 }
 
 // ==================== ДЕЙСТВИЯ ====================
 
+function onHandCardClick(invId) {
+  const card = currentBattleState.cards[invId] || currentBattleState.cards[String(invId)];
+  if (!card) return;
+
+  // Если уже в target mode — отменяем и начинаем заново
+  if (targetMode) { cancelTargetMode(); }
+
+  const targetReq = CARD_TARGETS[card.name];
+  if (!targetReq) {
+    doPlay(invId, null);
+    return;
+  }
+
+  const me = currentBattleState[currentPlayerKey];
+  const oppKey = currentPlayerKey === 'p1' ? 'p2' : 'p1';
+  const opp = currentBattleState[oppKey];
+  const pool = targetReq === 'friendly' ? me.board : opp.board;
+
+  if (!pool || pool.length === 0) {
+    bShowToast(targetReq === 'friendly' ? 'У вас нет персонажей для цели' : 'У соперника нет персонажей');
+    return;
+  }
+
+  pendingCardId = invId;
+  targetMode = targetReq;
+  sectionHashes.oppBoard = '';
+  sectionHashes.myBoard = '';
+  renderBattle({ id: currentBattleId, playerKey: currentPlayerKey, status: currentBattleState.status, state: currentBattleState });
+  showTargetHint(targetReq);
+}
+
+function showTargetHint(mode) {
+  const hint = document.getElementById('b-target-hint');
+  const sub = document.getElementById('b-target-sub');
+  sub.textContent = mode === 'friendly' ? 'Свой персонаж' : 'Персонаж противника';
+  hint.style.display = 'block';
+}
+
+function cancelTargetMode() {
+  pendingCardId = null;
+  targetMode = null;
+  document.getElementById('b-target-hint').style.display = 'none';
+  sectionHashes.oppBoard = '';
+  sectionHashes.myBoard = '';
+  if (currentBattleState) {
+    renderBattle({ id: currentBattleId, playerKey: currentPlayerKey, status: currentBattleState.status, state: currentBattleState });
+  }
+}
+
 function onBoardCardClick(el, ownerKey) {
   if (!currentBattleState || currentBattleState.status !== 'active') return;
-  if (currentBattleState.currentTurnPlayer !== currentPlayerKey) return;
 
   const invId = parseInt(el.dataset.inv);
   const st = currentBattleState;
+
+  // === Target mode: клик по карте-цели ===
+  if (targetMode && pendingCardId) {
+    const card = st.cards[invId] || st.cards[String(invId)];
+    if (!card) return;
+    if (!isValidTarget(card, ownerKey)) {
+      bShowToast('Недопустимая цель');
+      return;
+    }
+    const cardId = pendingCardId;
+    cancelTargetMode();
+    doPlay(cardId, invId);
+    return;
+  }
+
+  // === Обычный режим ===
+  if (st.currentTurnPlayer !== currentPlayerKey) return;
 
   if (ownerKey === currentPlayerKey) {
     const c = st.cards[invId] || st.cards[String(invId)];
     if (!c || c.hasAttacked || c.currentAtk <= 0) return;
     selectedAttacker = (selectedAttacker === invId) ? null : invId;
-    // Форсируем перерисовку: сбрасываем хеши досок
     sectionHashes.oppBoard = '';
     sectionHashes.myBoard = '';
     renderBattle({ id: currentBattleId, playerKey: currentPlayerKey, status: st.status, state: st });
@@ -347,12 +443,14 @@ function onBoardCardClick(el, ownerKey) {
   }
 }
 
-async function playCard(invId) {
+async function doPlay(invId, targetId) {
   if (isActionInProgress) return;
   isActionInProgress = true;
   try {
+    const body = { inv_id: invId };
+    if (targetId) body.target_id = targetId;
     await apiFetch(`/api/battle/${currentBattleId}/play`, {
-      method: 'POST', body: JSON.stringify({ inv_id: invId })
+      method: 'POST', body: JSON.stringify(body)
     });
   } catch (err) { bShowToast(err.message); }
   isActionInProgress = false;
@@ -364,7 +462,8 @@ async function doAttack(attackerId, targetId) {
   isActionInProgress = true;
   try {
     await apiFetch(`/api/battle/${currentBattleId}/attack`, {
-      method: 'POST', body: JSON.stringify({ attacker_id: attackerId, target_id: targetId })
+      method: 'POST',
+      body: JSON.stringify({ attacker_id: attackerId, target_id: targetId })
     });
     selectedAttacker = null;
   } catch (err) { bShowToast(err.message); }
@@ -395,14 +494,9 @@ async function endTurn() {
 function updateTimerDisplay() {
   const el = document.getElementById('b-timer');
   if (!el) return;
-  if (currentOppDiscSec > OPP_DISC_THRESHOLD) {
-    el.style.color = '#666';
-    return;
-  }
+  if (currentOppDiscSec > OPP_DISC_THRESHOLD) { el.style.color = '#666'; return; }
   if (!currentBattleState || currentBattleState.status !== 'active' || !currentBattleState.turnStartedAt) {
-    el.textContent = '⏱ —';
-    el.style.color = '#666';
-    return;
+    el.textContent = '⏱ —'; el.style.color = '#666'; return;
   }
   const elapsed = Math.floor((Date.now() - currentBattleState.turnStartedAt) / 1000);
   const remaining = Math.max(0, 60 - elapsed);
@@ -419,17 +513,14 @@ function updateTimerDisplay() {
   }
 }
 
-// ==================== RECONNECT OVERLAY (локальный тик) ====================
 function updateReconnectOverlayTick() {
   const overlay = document.getElementById('b-reconnect-overlay');
   const timerEl = document.getElementById('b-reconnect-timer');
   if (!overlay || !timerEl) return;
-
   const active = currentBattleState && currentBattleState.status === 'active';
 
   if (currentOppDiscSec >= OPP_DISC_THRESHOLD && active) {
     if (!oppDisconnectedSince) {
-      // Первое обнаружение — устанавливаем локальную точку отсчёта
       oppDisconnectedSince = Date.now() - currentOppDiscSec * 1000;
     }
     const goneSec = Math.floor((Date.now() - oppDisconnectedSince) / 1000);
@@ -469,9 +560,16 @@ function showBattleResult(kind) {
   const overlay = document.getElementById('b-result');
   const title = document.getElementById('b-result-title');
   overlay.classList.add('active');
-  if (kind === 'win') { title.textContent = '🏆 ПОБЕДА'; title.className = 'win'; vibrate('heavy'); }
-  else if (kind === 'lose') { title.textContent = '💀 ПОРАЖЕНИЕ'; title.className = 'lose'; vibrate('heavy'); }
-  else { title.textContent = 'НИЧЬЯ'; title.className = 'draw'; }
+  if (kind === 'win') {
+    title.textContent = '🏆 ПОБЕДА'; title.className = 'win';
+    vibrate('heavy'); flashScreen('win');
+  } else if (kind === 'lose') {
+    title.textContent = '💀 ПОРАЖЕНИЕ'; title.className = 'lose';
+    vibrate('heavy'); flashScreen('lose');
+  } else {
+    title.textContent = 'НИЧЬЯ'; title.className = 'draw';
+    flashScreen('draw');
+  }
 }
 
 // ==================== СКРОЛЛ РУКИ ====================
@@ -487,7 +585,6 @@ function setupHandScroll() {
     handStartX = e.clientX;
     handStartScroll = handEl.scrollLeft;
   };
-
   const onMove = (e) => {
     if (!handPointerDown) return;
     const dx = handStartX - e.clientX;
@@ -498,7 +595,6 @@ function setupHandScroll() {
       if (e.cancelable) e.preventDefault();
     }
   };
-
   const onUp = () => {
     handPointerDown = false;
     handEl.classList.remove('dragging');
@@ -508,9 +604,7 @@ function setupHandScroll() {
   handEl.addEventListener('pointermove', onMove);
   handEl.addEventListener('pointerup', onUp);
   handEl.addEventListener('pointercancel', onUp);
-  handEl.addEventListener('pointerleave', () => {
-    if (handPointerDown) onUp();
-  });
+  handEl.addEventListener('pointerleave', () => { if (handPointerDown) onUp(); });
 
   handEl.addEventListener('wheel', (e) => {
     if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
@@ -523,6 +617,7 @@ function setupHandScroll() {
 document.addEventListener('keydown', (e) => {
   const battleScreen = document.getElementById('battle-screen');
   if (!battleScreen || !battleScreen.classList.contains('active')) return;
+  if (e.key === 'Escape') { cancelTargetMode(); selectedAttacker = null; }
   if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
     const handEl = document.getElementById('b-hand');
     if (!handEl) return;
@@ -553,6 +648,9 @@ document.addEventListener('keydown', (e) => {
     oppInfoEl.style.cursor = 'pointer';
     oppInfoEl.onclick = () => attackPlayer();
   }
+
+  const targetCancel = document.getElementById('b-target-cancel');
+  if (targetCancel) targetCancel.onclick = cancelTargetMode;
 
   setupHandScroll();
 })();
