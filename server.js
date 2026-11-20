@@ -61,6 +61,10 @@ pool.query(`
   )
 `).catch(err => console.error('DB Init Error:', err));
 
+// На случай, если таблица уже была создана без battle_id
+pool.query(`ALTER TABLE battle_invites ADD COLUMN IF NOT EXISTS battle_id INTEGER`)
+  .catch(err => console.error('Migration Error battle_id:', err));
+
 // Миграция: стоимость карт
 pool.query(`ALTER TABLE cards ADD COLUMN IF NOT EXISTS cost INTEGER DEFAULT 1`).catch(()=>{});
 
@@ -286,33 +290,53 @@ app.post('/api/deck/toggle', telegramAuth, playerAuth, async (req, res) => {
   }
 });
 
-// Открыть бесплатный кейс
+// Открыть платный кейс (100 монет, 3 карты)
+const PACK_COST = 100;
+const PACK_SIZE = 3;
+
 app.post('/api/shop/open', telegramAuth, playerAuth, async (req, res) => {
   try {
-    // 1. Определяем редкость по шансам
-    const roll = Math.random() * 100;
-    let rarity = 'grey'; // Частая (68.52%)
-    if (roll < 0.13) rarity = 'gold'; // Легендарная (0.13%)
-    else if (roll < 2.87) rarity = 'blue'; // Супер-редкая (2.74%)
-    else if (roll < 12.84) rarity = 'orange'; // Редкая (9.97%)
-    else if (roll < 31.48) rarity = 'purple'; // Обычная (18.64%)
-
-    // 2. Выбираем случайную карту этой редкости
-    let cardResult = await pool.query('SELECT * FROM cards WHERE rarity = $1 ORDER BY RANDOM() LIMIT 1', [rarity]);
-    
-    // Если карт такой редкости нет в базе, берем любую
-    if (cardResult.rows.length === 0) {
-      cardResult = await pool.query('SELECT * FROM cards ORDER BY RANDOM() LIMIT 1');
+    // 1. Атомарно списываем монеты (защита от двойного клика)
+    const deductRes = await pool.query(
+      'UPDATE players SET coins = coins - $1 WHERE id = $2 AND coins >= $1 RETURNING coins',
+      [PACK_COST, req.player.id]
+    );
+    if (deductRes.rows.length === 0) {
+      return res.status(400).json({ error: `Недостаточно монет (нужно ${PACK_COST})` });
     }
-    
-    const card = cardResult.rows[0];
-    if (!card) return res.status(500).json({ error: 'База карт пуста' });
-    
-    // 3. Добавляем в инвентарь
-    await pool.query('INSERT INTO player_inventory (player_id, card_id) VALUES ($1, $2)', [req.player.id, card.id]);
-    
-    // 4. Возвращаем данные карты для анимации
-    res.json({ success: true, card: card });
+
+    // 2. Генерируем 3 карты
+    const cards = [];
+    for (let i = 0; i < PACK_SIZE; i++) {
+      const roll = Math.random() * 100;
+      let rarity = 'grey';
+      if (roll < 0.13) rarity = 'gold';
+      else if (roll < 2.87) rarity = 'blue';
+      else if (roll < 12.84) rarity = 'orange';
+      else if (roll < 31.48) rarity = 'purple';
+
+      let cardResult = await pool.query(
+        'SELECT * FROM cards WHERE rarity = $1 ORDER BY RANDOM() LIMIT 1', [rarity]
+      );
+      if (cardResult.rows.length === 0) {
+        cardResult = await pool.query('SELECT * FROM cards ORDER BY RANDOM() LIMIT 1');
+      }
+      const card = cardResult.rows[0];
+      if (card) {
+        await pool.query(
+          'INSERT INTO player_inventory (player_id, card_id, is_new) VALUES ($1, $2, TRUE)',
+          [req.player.id, card.id]
+        );
+        cards.push(card);
+      }
+    }
+
+    res.json({
+      success: true,
+      cards,
+      coins: deductRes.rows[0].coins,
+      cost: PACK_COST
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

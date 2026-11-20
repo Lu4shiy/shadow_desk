@@ -10,7 +10,21 @@
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-    body { font-family: 'Montserrat', sans-serif; background: #121212; color: #eee; height: 100vh; overflow: hidden; display: flex; flex-direction: column; font-weight: 600; }
+    html { height: 100%; overflow-x: hidden; }
+    body {
+      font-family: 'Montserrat', sans-serif;
+      background: #121212;
+      color: #eee;
+      height: 100vh;
+      height: 100dvh;
+      overflow: hidden;
+      overflow-x: hidden;
+      display: flex;
+      flex-direction: column;
+      font-weight: 600;
+      overscroll-behavior: none;
+      touch-action: pan-y;
+    }
     h2, h3 { font-family: 'Montserrat', sans-serif; font-weight: 700; letter-spacing: 0.5px; }
     
     #loading-screen { position: fixed; inset: 0; background: #121212; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 999; transition: opacity 0.5s ease; }
@@ -54,11 +68,27 @@
     .resources { display: flex; flex-direction: column; gap: 5px; align-items: flex-end; }
     .res-item { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: bold; background: #222; padding: 4px 10px; border-radius: 12px; border: 1px solid #333; }
     .res-icon { width: 20px; height: 20px; object-fit: contain; display: inline-block; }
-    .content { flex: 1; padding: 20px; overflow-y: auto; display: none; }
+    .content {
+      flex: 1;
+      padding: 20px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      display: none;
+      touch-action: pan-y;
+      -webkit-overflow-scrolling: touch;
+    }
     .content.active { display: block; }
     
     /* Нижняя навигация */
-    .bottom-nav { display: flex; background: #1a1a1a; border-top: 1px solid #333; padding: 10px 15px; padding-bottom: env(safe-area-inset-bottom, 15px); justify-content: space-around; }
+    .bottom-nav {
+      display: flex;
+      background: #1a1a1a;
+      border-top: 1px solid #333;
+      padding: 10px 15px;
+      padding-bottom: calc(15px + env(safe-area-inset-bottom, 0px));
+      justify-content: space-around;
+      flex-shrink: 0;
+    }
     .nav-btn { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; background: transparent; border: none; color: #666; box-shadow: none; padding: 5px; font-size: 12px; transition: color 0.2s; }
     .nav-btn:active { transform: none; }
     .nav-btn.active { color: #9b59b6; }
@@ -389,9 +419,10 @@
     <div id="tab-shop" class="content">
       <h2 style="text-align: center; margin-bottom: 20px;">Магазин</h2>
       <div style="text-align: center; padding: 20px; background: #1e1e1e; border-radius: 12px; border: 1px solid #333;">
-        <h3 style="margin-bottom: 10px;">Бесплатный кейс</h3>
-        <p style="color: #888; font-size: 14px; margin-bottom: 20px;">Испытай удачу раз в день!</p>
-        <button id="btn-open-case" style="background: linear-gradient(135deg, #f1c40f, #f39c12);">Открыть кейс</button>
+        <h3 style="margin-bottom: 10px;">Кейс с картами</h3>
+        <p style="color: #888; font-size: 14px; margin-bottom: 8px;">3 случайные карты</p>
+        <p style="color: #f1c40f; font-size: 13px; font-weight: bold; margin-bottom: 20px;">Стоимость: 💰 100</p>
+        <button id="btn-open-case" style="background: linear-gradient(135deg, #f1c40f, #f39c12);">Открыть за 100 💰</button>
       </div>
     </div>
 
@@ -480,9 +511,12 @@
     </div>
   </div>
 
-  <!-- Контекстное меню (ПКМ / Долгое нажатие) -->
-  <div id="context-menu" style="display: none; position: fixed; background: #1a1a1a; border: 1px solid #444; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.8); z-index: 4000; padding: 5px;">
-    <button id="ctx-toggle-deck" style="background: #333; padding: 10px 15px; font-size: 14px; border-radius: 6px; margin: 0; white-space: nowrap;">Добавить в колоду</button>
+  <!-- Контекстное меню (bottom sheet — надёжно на телефоне) -->
+  <div id="ctx-backdrop" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 3900;"></div>
+  <div id="context-menu" style="display: none; position: fixed; bottom: 0; left: 0; right: 0; background: #1a1a1a; border-top: 2px solid #444; border-radius: 16px 16px 0 0; padding: 20px; z-index: 4000; box-shadow: 0 -4px 15px rgba(0,0,0,0.8); padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));">
+    <div style="width: 40px; height: 4px; background: #555; border-radius: 2px; margin: 0 auto 15px;"></div>
+    <button id="ctx-toggle-deck" style="background: #2ecc71; padding: 14px; font-size: 15px; border-radius: 10px; margin-bottom: 10px; width: 100%;">Добавить в колоду</button>
+    <button id="ctx-cancel" style="background: #333; padding: 14px; font-size: 15px; border-radius: 10px; width: 100%; box-shadow: none;">Отмена</button>
   </div>
 
   <!-- Экран боя -->
@@ -534,7 +568,7 @@
 
   <!-- Модальное окно открытия пака -->
   <div id="pack-modal" class="modal-overlay">
-    <h2 style="margin-bottom: 20px; color: #f1c40f; font-family: 'Cinzel', serif; text-align: center; font-size: 20px;">Смахни крышку вправо</h2>
+    <h2 id="pack-title" style="margin-bottom: 20px; color: #f1c40f; font-family: 'Cinzel', serif; text-align: center; font-size: 20px;">Смахни крышку вправо</h2>
     
     <div class="pack-wrapper" id="pack-wrapper">
       <div class="pack-base">SHADOW DECK</div>
@@ -545,8 +579,10 @@
     </div>
     
     <div id="pack-result" style="display: none; flex-direction: column; align-items: center; width: 100%;">
-      <div id="pack-card-container" style="width: 240px; margin-bottom: 20px;"></div>
-      <button id="btn-close-pack" style="width: 200px;">Закрыть</button>
+      <div id="pack-card-container" style="width: 240px; margin-bottom: 15px; touch-action: none;"></div>
+      <div id="pack-dots" style="margin-bottom: 15px; height: 12px;"></div>
+      <p id="pack-swipe-hint" style="color: #888; font-size: 13px; margin-bottom: 15px;">⬆️ Смахни карту вверх</p>
+      <button id="btn-close-pack" style="width: 200px; display: none;">Забрать все</button>
     </div>
   </div>
 </body>
