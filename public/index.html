@@ -229,11 +229,14 @@
     .b-bottom { display: flex; align-items: center; gap: 6px; }
     .b-energy { display: flex; align-items: center; gap: 4px; padding: 6px 10px; border-radius: 16px;
       background: linear-gradient(135deg, #3498db, #2980b9); font-weight: bold; color: #fff; font-size: 13px; }
+    #b-timer { font-weight: bold; font-size: 13px; padding: 6px 10px; background: rgba(0,0,0,0.5);
+      border-radius: 10px; border: 1px solid #333; color: #2ecc71; min-width: 54px; text-align: center; }
     #b-end-turn { padding: 9px 14px; font-size: 12px; width: auto;
       background: linear-gradient(135deg, #e67e22, #d35400); }
     #b-end-turn:disabled { opacity: 0.4; }
-    #b-surrender { position: absolute; top: 10px; right: 10px; width: 32px; height: 32px;
-      padding: 0; border-radius: 50%; background: #e74c3c; font-size: 14px; z-index: 10; }
+    #b-surrender { position: absolute; top: 10px; right: 10px; width: 34px; height: 34px;
+      padding: 0; border-radius: 50%; background: #e74c3c; font-size: 16px; z-index: 100;
+      display: flex; justify-content: center; align-items: center; pointer-events: auto; }
 
     .b-hand { display: flex; gap: 5px; padding: 4px 0; overflow-x: auto; overflow-y: hidden;
       min-height: 90px; align-items: flex-end; }
@@ -421,8 +424,14 @@
       <div style="text-align: center; padding: 20px; background: #1e1e1e; border-radius: 12px; border: 1px solid #333;">
         <h3 style="margin-bottom: 10px;">Кейс с картами</h3>
         <p style="color: #888; font-size: 14px; margin-bottom: 8px;">3 случайные карты</p>
-        <p style="color: #f1c40f; font-size: 13px; font-weight: bold; margin-bottom: 20px;">Стоимость: 💰 100</p>
-        <button id="btn-open-case" style="background: linear-gradient(135deg, #f1c40f, #f39c12);">Открыть за 100 💰</button>
+        <p style="color: #f1c40f; font-size: 13px; font-weight: bold; margin-bottom: 20px; display: flex; justify-content: center; align-items: center; gap: 6px;">
+          Стоимость: <img src="/img/coin.png" style="width: 18px; height: 18px;" onerror="this.style.display='none'"> 100
+        </p>
+        <button id="btn-open-case" style="background: linear-gradient(135deg, #f1c40f, #f39c12);">
+          <span style="display: inline-flex; align-items: center; justify-content: center; gap: 6px;">
+            Открыть за <img src="/img/coin.png" style="width: 20px; height: 20px;" onerror="this.style.display='none'"> 100
+          </span>
+        </button>
       </div>
     </div>
 
@@ -548,6 +557,7 @@
           <div class="hp-bar"><div id="b-my-hp-bar" class="hp-bar-fill" style="width:100%"></div><span id="b-my-hp-text" class="hp-text">30/30</span></div>
         </div>
       </div>
+      <div id="b-timer">⏱ —</div>
       <div id="b-energy" class="b-energy">⚡ <span id="b-energy-val">0/0</span></div>
       <button id="b-end-turn">Конец хода</button>
     </div>
@@ -579,7 +589,7 @@
     </div>
     
     <div id="pack-result" style="display: none; flex-direction: column; align-items: center; width: 100%;">
-      <div id="pack-card-container" style="width: 240px; margin-bottom: 15px; touch-action: none;"></div>
+      <div id="pack-card-stack" style="position: relative; width: 240px; height: 300px; margin-bottom: 15px; touch-action: none; user-select: none; -webkit-user-select: none;"></div>
       <div id="pack-dots" style="margin-bottom: 15px; height: 12px;"></div>
       <p id="pack-swipe-hint" style="color: #888; font-size: 13px; margin-bottom: 15px;">⬆️ Смахни карту вверх</p>
       <button id="btn-close-pack" style="width: 200px; display: none;">Забрать все</button>

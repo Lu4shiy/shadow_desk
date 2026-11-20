@@ -259,7 +259,6 @@ function showMain(profile) {
       try {
         const res = await apiFetch('/api/shop/open', { method: 'POST' });
 
-        // Обновляем монеты
         if (typeof res.coins === 'number') {
           currentProfile.coins = res.coins;
           document.getElementById('ui-coins').textContent = res.coins;
@@ -279,22 +278,25 @@ function showMain(profile) {
         const swipeHint = document.getElementById('pack-swipe-hint');
         const closeBtn = document.getElementById('btn-close-pack');
         const dotsEl = document.getElementById('pack-dots');
-        const cardContainer = document.getElementById('pack-card-container');
+        const stackEl = document.getElementById('pack-card-stack');
 
-        // Сброс
         packWrapper.style.display = 'block';
         packResult.style.display = 'none';
         packTop.style.transform = 'translateX(0) rotate(0deg)';
         packTop.style.opacity = '1';
         packTitle.textContent = 'Смахни крышку вправо';
         packTitle.style.display = 'block';
+        closeBtn.style.display = 'none';
+        swipeHint.style.display = 'block';
+        stackEl.innerHTML = '';
+        dotsEl.innerHTML = '';
         packModal.style.display = 'flex';
 
         let packIndex = 0;
+        const totalCards = cards.length;
 
-        // === Свайп крышечки (влево → вправо) ===
+        // Свайп крышки пака
         let startX = 0, currentX = 0, isDragging = false;
-
         const onDragStart = (e) => {
           isDragging = true;
           startX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -304,9 +306,7 @@ function showMain(profile) {
           if (!isDragging) return;
           currentX = e.touches ? e.touches[0].clientX : e.clientX;
           const diff = currentX - startX;
-          if (diff > 0) {
-            packTop.style.transform = `translateX(${diff}px) rotate(${diff * 0.1}deg)`;
-          }
+          if (diff > 0) packTop.style.transform = `translateX(${diff}px) rotate(${diff * 0.1}deg)`;
         };
         const onDragEnd = () => {
           if (!isDragging) return;
@@ -317,16 +317,17 @@ function showMain(profile) {
           document.removeEventListener('touchmove', onDragMove);
           document.removeEventListener('touchend', onDragEnd);
           if (diff > 60) {
-            packTop.style.transform = `translateX(300px) rotate(20deg)`;
+            packTop.style.transform = 'translateX(300px) rotate(20deg)';
             packTop.style.opacity = '0';
-            setTimeout(showCurrentCard, 250);
+            setTimeout(buildStack, 250);
           } else {
-            packTop.style.transform = `translateX(0) rotate(0deg)`;
+            packTop.style.transform = 'translateX(0) rotate(0deg)';
           }
           startX = 0; currentX = 0;
         };
 
         packTop.onmousedown = (e) => {
+          e.preventDefault();
           onDragStart(e);
           document.addEventListener('mousemove', onDragMove);
           document.addEventListener('mouseup', onDragEnd);
@@ -337,62 +338,66 @@ function showMain(profile) {
           document.addEventListener('touchend', onDragEnd);
         };
 
-        // === Показ текущей карты из пачки ===
+        // Все карты грузятся одновременно в стеке
+        function buildStack() {
+          packWrapper.style.display = 'none';
+          packTitle.style.display = 'none';
+          packResult.style.display = 'flex';
+          stackEl.innerHTML = '';
+          packIndex = 0;
+
+          cards.forEach((card, idx) => {
+            const imgHtml = card.image_url
+              ? `<img src="/img/cards/${card.image_url}" draggable="false" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:12px;display:block;pointer-events:none;user-select:none;-webkit-user-drag:none;" />`
+              : `<div style="background:url('/img/card_template_${card.rarity}.png') center/100% 100%;width:100%;height:100%;display:flex;justify-content:center;align-items:center;border-radius:12px;"><div style="background:rgba(0,0,0,0.8);padding:10px;border-radius:8px;font-weight:bold;">${card.name}</div></div>`;
+
+            const el = document.createElement('div');
+            el.className = 'pack-stack-card';
+            el.dataset.idx = idx;
+            el.style.cssText = `
+              position: absolute; inset: 0; border-radius: 12px; overflow: hidden;
+              z-index: ${totalCards - idx};
+              transform: ${idx === 0 ? 'translateY(0) scale(1)' : `translateY(${idx * 6}px) scale(${1 - idx * 0.03})`};
+              transition: transform 0.3s ease-out, opacity 0.3s ease-out;
+              will-change: transform, opacity;
+              user-select: none; -webkit-user-select: none; -webkit-user-drag: none;
+            `;
+            el.innerHTML = imgHtml;
+            stackEl.appendChild(el);
+          });
+
+          renderDots();
+          bindTopCardSwipe();
+        }
+
         function renderDots() {
           let html = '';
-          for (let i = 0; i < cards.length; i++) {
+          for (let i = 0; i < totalCards; i++) {
             html += `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;margin:0 4px;background:${i <= packIndex ? '#f1c40f' : '#555'};"></span>`;
           }
           dotsEl.innerHTML = html;
         }
 
-        function showCurrentCard() {
-          packWrapper.style.display = 'none';
-          packTitle.style.display = 'none';
-          packResult.style.display = 'flex';
-
-          const card = cards[packIndex];
-          if (!card) return;
-
-          const imgHtml = card.image_url
-            ? `<img src="/img/cards/${card.image_url}" style="width:100%;border-radius:12px;display:block;" alt="${card.name}" />`
-            : `<div style="background:url('/img/card_template_${card.rarity}.png') center/100% 100%;aspect-ratio:4/5;display:flex;justify-content:center;align-items:center;border-radius:12px;"><div style="background:rgba(0,0,0,0.8);padding:10px;border-radius:8px;font-weight:bold;">${card.name}</div></div>`;
-
-          cardContainer.innerHTML = `<div id="pack-current-card" class="card-reveal" style="width:100%;">${imgHtml}</div>`;
-          renderDots();
-
-          const isLast = packIndex >= cards.length - 1;
-          if (isLast) {
-            swipeHint.style.display = 'none';
-            closeBtn.style.display = 'block';
-            loadInventory();
-          } else {
-            swipeHint.style.display = 'block';
-            closeBtn.style.display = 'none';
-            bindCardSwipeUp();
-          }
-        }
-
-        // === Свайп карты вверх → следующая ===
-        function bindCardSwipeUp() {
-          const cardEl = document.getElementById('pack-current-card');
-          if (!cardEl) return;
+        function bindTopCardSwipe() {
+          const topCard = stackEl.querySelector(`.pack-stack-card[data-idx="${packIndex}"]`);
+          if (!topCard) return;
 
           let sY = 0, cY = 0, drag = false;
 
           const onStart = (e) => {
+            if (e.cancelable) e.preventDefault();
             drag = true;
             sY = e.touches ? e.touches[0].clientY : e.clientY;
             cY = sY;
+            topCard.style.transition = 'none';
           };
           const onMove = (e) => {
             if (!drag) return;
             cY = e.touches ? e.touches[0].clientY : e.clientY;
             const diff = cY - sY;
             if (diff < 0) {
-              cardEl.style.transition = '';
-              cardEl.style.transform = `translateY(${diff}px) rotate(${diff * 0.02}deg)`;
-              cardEl.style.opacity = String(Math.max(0, 1 + diff / 400));
+              topCard.style.transform = `translateY(${diff}px) scale(${1 + diff / 2000})`;
+              topCard.style.opacity = String(Math.max(0, 1 + diff / 500));
             }
           };
           const onEnd = () => {
@@ -403,29 +408,45 @@ function showMain(profile) {
             document.removeEventListener('mouseup', onEnd);
             document.removeEventListener('touchmove', onMove);
             document.removeEventListener('touchend', onEnd);
+            topCard.style.transition = 'transform 0.3s ease-out, opacity 0.3s ease-out';
+
             if (diff < -80) {
-              cardEl.style.transition = 'transform 0.25s ease-out, opacity 0.25s ease-out';
-              cardEl.style.transform = 'translateY(-150%) scale(0.85)';
-              cardEl.style.opacity = '0';
+              topCard.style.transform = 'translateY(-150%) scale(0.7)';
+              topCard.style.opacity = '0';
+              topCard.style.pointerEvents = 'none';
               setTimeout(() => {
                 packIndex++;
-                showCurrentCard();
-              }, 260);
+                stackEl.querySelectorAll('.pack-stack-card').forEach((el) => {
+                  const logicalIdx = parseInt(el.dataset.idx);
+                  const newRel = logicalIdx - packIndex;
+                  if (newRel < 0) return;
+                  el.style.transform = newRel === 0
+                    ? 'translateY(0) scale(1)'
+                    : `translateY(${newRel * 6}px) scale(${1 - newRel * 0.03})`;
+                });
+                renderDots();
+
+                if (packIndex >= totalCards - 1) {
+                  swipeHint.style.display = 'none';
+                  closeBtn.style.display = 'block';
+                  loadInventory();
+                } else {
+                  bindTopCardSwipe();
+                }
+              }, 310);
             } else {
-              cardEl.style.transition = 'transform 0.2s ease-out, opacity 0.2s ease-out';
-              cardEl.style.transform = 'translateY(0)';
-              cardEl.style.opacity = '1';
-              setTimeout(() => { cardEl.style.transition = ''; }, 220);
+              topCard.style.transform = 'translateY(0) scale(1)';
+              topCard.style.opacity = '1';
             }
             sY = 0; cY = 0;
           };
 
-          cardEl.onmousedown = (e) => {
+          topCard.onmousedown = (e) => {
             onStart(e);
             document.addEventListener('mousemove', onMove);
             document.addEventListener('mouseup', onEnd);
           };
-          cardEl.ontouchstart = (e) => {
+          topCard.ontouchstart = (e) => {
             onStart(e);
             document.addEventListener('touchmove', onMove, { passive: false });
             document.addEventListener('touchend', onEnd);

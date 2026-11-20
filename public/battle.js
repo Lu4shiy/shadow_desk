@@ -4,8 +4,10 @@ let currentBattleId = null;
 let currentBattleState = null;
 let currentPlayerKey = null;
 let battlePollTimer = null;
+let turnTimerInterval = null;
 let selectedAttacker = null;
-let battleRenderedKey = '';
+let lastRenderHash = '';
+let isActionInProgress = false;
 
 function bShowToast(msg, ok = false) {
   if (typeof showToast === 'function') showToast(msg, ok);
@@ -16,35 +18,44 @@ function joinBattle(battleId) {
   if (currentBattleId === battleId) return;
   currentBattleId = battleId;
   currentBattleState = null;
+  currentPlayerKey = null;
   selectedAttacker = null;
-  battleRenderedKey = '';
+  lastRenderHash = '';
 
   document.getElementById('battle-screen').classList.add('active');
   document.getElementById('b-result').classList.remove('active');
   document.getElementById('b-hand').innerHTML = '';
+  document.getElementById('b-timer').textContent = '⏱ —';
 
   fetchBattleState();
   if (battlePollTimer) clearInterval(battlePollTimer);
-  battlePollTimer = setInterval(fetchBattleState, 1500);
+  battlePollTimer = setInterval(fetchBattleState, 2000);
+
+  if (turnTimerInterval) clearInterval(turnTimerInterval);
+  turnTimerInterval = setInterval(updateTimerDisplay, 500);
 }
 
 function leaveBattle() {
   if (battlePollTimer) { clearInterval(battlePollTimer); battlePollTimer = null; }
+  if (turnTimerInterval) { clearInterval(turnTimerInterval); turnTimerInterval = null; }
   document.getElementById('battle-screen').classList.remove('active');
   document.getElementById('b-result').classList.remove('active');
   currentBattleId = null;
   currentBattleState = null;
+  currentPlayerKey = null;
   selectedAttacker = null;
-  battleRenderedKey = '';
+  lastRenderHash = '';
 }
 
 async function fetchBattleState() {
   if (!currentBattleId) return;
+  if (isActionInProgress) return;
   try {
     const res = await apiFetch(`/api/battle/${currentBattleId}`);
     currentBattleState = res.battle.state;
     currentPlayerKey = res.battle.playerKey;
     renderBattle(res.battle);
+    updateTimerDisplay();
   } catch (err) {
     console.error('fetchBattle:', err);
     if (err.message && err.message.includes('не найден')) leaveBattle();
@@ -57,20 +68,25 @@ function cardImgUrl(card) {
 }
 
 function renderBattle(battle) {
+  const hash = JSON.stringify({ s: battle.state, p: battle.playerKey, sel: selectedAttacker });
+  if (hash === lastRenderHash) return;
+  lastRenderHash = hash;
+
   const st = battle.state;
   const myKey = battle.playerKey;
   const oppKey = myKey === 'p1' ? 'p2' : 'p1';
   const me = st[myKey], opp = st[oppKey];
   const myTurn = st.currentTurnPlayer === myKey;
 
-  // Header
-  document.getElementById('b-opp-avatar').src = opp.player?.avatar_url || '';
+  const oppAvatarEl = document.getElementById('b-opp-avatar');
+  if (oppAvatarEl) oppAvatarEl.src = opp.player?.avatar_url || '';
   document.getElementById('b-opp-nick').textContent = opp.player?.nickname || 'Соперник';
-  document.getElementById('b-opp-sub').textContent = `🃏 ${opp.handCount ?? opp.hand.length} карт в руке`;
+  document.getElementById('b-opp-sub').textContent = `🃏 ${opp.handCount ?? (opp.hand ? opp.hand.length : 0)} карт в руке`;
   document.getElementById('b-opp-hp-bar').style.width = Math.max(0, (opp.hp / opp.maxHp) * 100) + '%';
   document.getElementById('b-opp-hp-text').textContent = `${Math.max(0, opp.hp)}/${opp.maxHp}`;
 
-  document.getElementById('b-my-avatar').src = me.player?.avatar_url || '';
+  const myAvatarEl = document.getElementById('b-my-avatar');
+  if (myAvatarEl) myAvatarEl.src = me.player?.avatar_url || '';
   document.getElementById('b-my-nick').textContent = me.player?.nickname || 'Вы';
   document.getElementById('b-my-hp-bar').style.width = Math.max(0, (me.hp / me.maxHp) * 100) + '%';
   document.getElementById('b-my-hp-text').textContent = `${Math.max(0, me.hp)}/${me.maxHp}`;
@@ -79,25 +95,12 @@ function renderBattle(battle) {
   const endBtn = document.getElementById('b-end-turn');
   endBtn.disabled = !myTurn || st.status !== 'active';
 
-  // Boards
   renderBoard('b-opp-board', opp.board, st.cards, oppKey, myKey, myTurn);
   renderBoard('b-my-board', me.board, st.cards, myKey, oppKey, myTurn);
   renderHand(me.hand, st.cards, me.energy, myTurn, st.status === 'active');
 
-  // Result
   if (st.status === 'finished') {
     showBattleResult(st.winner === myKey ? 'win' : (st.winner === null ? 'draw' : 'lose'));
-  }
-
-  // Turn indicator
-  const badge = document.getElementById('b-turn-badge');
-  const turnKey = `${st.currentTurnPlayer}-${st[st.currentTurnPlayer].turnNumber}-${battle.id}`;
-  if (turnKey !== battleRenderedKey && st.status === 'active') {
-    battleRenderedKey = turnKey;
-    badge.textContent = myTurn ? 'ВАШ ХОД' : 'ХОД СОПЕРНИКА';
-    badge.classList.remove('show');
-    void badge.offsetWidth;
-    badge.classList.add('show');
   }
 }
 
@@ -122,7 +125,7 @@ function renderBoard(containerId, boardInvIds, cards, ownerKey, otherKey, myTurn
     if (isEnemyTarget) cls.push('enemy-target');
 
     const imgUrl = cardImgUrl(c);
-    const img = imgUrl ? `<img src="${imgUrl}" alt="" />`
+    const img = imgUrl ? `<img src="${imgUrl}" alt="" draggable="false" />`
       : `<div style="width:100%;height:100%;background:#222;display:flex;justify-content:center;align-items:center;font-size:9px;text-align:center;padding:2px;">${c.name}</div>`;
 
     return `
@@ -142,41 +145,6 @@ function renderBoard(containerId, boardInvIds, cards, ownerKey, otherKey, myTurn
   });
 }
 
-function onBoardCardClick(el, ownerKey) {
-  if (!currentBattleState || currentBattleState.status !== 'active') return;
-  if (currentBattleState.currentTurnPlayer !== currentPlayerKey) {
-    bShowToast('Сейчас не ваш ход');
-    return;
-  }
-  const invId = parseInt(el.dataset.inv);
-  const st = currentBattleState;
-  const me = st[currentPlayerKey];
-  const opp = st[currentPlayerKey === 'p1' ? 'p2' : 'p1'];
-
-  if (ownerKey === currentPlayerKey) {
-    // Свой персонаж — выбрать/снять
-    const c = st.cards[invId] || st.cards[String(invId)];
-    if (!c || c.hasAttacked) { bShowToast('Эта карта уже атаковала'); return; }
-    if (c.currentAtk <= 0) { bShowToast('У карты нет атаки'); return; }
-    selectedAttacker = (selectedAttacker === invId) ? null : invId;
-    renderBattleFromCache();
-  } else {
-    // Цель
-    if (!selectedAttacker) { bShowToast('Сначала выберите атакующего'); return; }
-    doAttack(selectedAttacker, invId);
-  }
-}
-
-function renderBattleFromCache() {
-  if (!currentBattleState) return;
-  renderBattle({
-    id: currentBattleId,
-    playerKey: currentPlayerKey,
-    status: currentBattleState.status,
-    state: currentBattleState
-  });
-}
-
 function renderHand(hand, cards, energy, myTurn, active) {
   const container = document.getElementById('b-hand');
   if (!hand || hand.length === 0) { container.innerHTML = ''; return; }
@@ -186,7 +154,7 @@ function renderHand(hand, cards, energy, myTurn, active) {
     if (!c) return '';
     const playable = active && myTurn && c.cost <= energy;
     const imgUrl = cardImgUrl(c);
-    const img = imgUrl ? `<img src="${imgUrl}" alt="" />`
+    const img = imgUrl ? `<img src="${imgUrl}" alt="" draggable="false" />`
       : `<div style="width:100%;height:100%;background:#222;display:flex;justify-content:center;align-items:center;font-size:8px;text-align:center;padding:2px;">${c.name}</div>`;
     const stats = c.type === 'Персонаж'
       ? `<div class="hc-stats"><span class="atk">⚔${c.baseAtk}</span><span class="hp">❤${c.baseHp}</span></div>`
@@ -210,24 +178,53 @@ function renderHand(hand, cards, energy, myTurn, active) {
   });
 }
 
+function onBoardCardClick(el, ownerKey) {
+  if (!currentBattleState || currentBattleState.status !== 'active') return;
+  if (currentBattleState.currentTurnPlayer !== currentPlayerKey) {
+    bShowToast('Сейчас не ваш ход');
+    return;
+  }
+  const invId = parseInt(el.dataset.inv);
+  const st = currentBattleState;
+
+  if (ownerKey === currentPlayerKey) {
+    const c = st.cards[invId] || st.cards[String(invId)];
+    if (!c || c.hasAttacked) { bShowToast('Эта карта уже атаковала'); return; }
+    if (c.currentAtk <= 0) { bShowToast('У карты нет атаки'); return; }
+    selectedAttacker = (selectedAttacker === invId) ? null : invId;
+    // Принудительный пересчёт — снимаем хеш
+    lastRenderHash = '';
+    renderBattle({ id: currentBattleId, playerKey: currentPlayerKey, status: st.status, state: st });
+  } else {
+    if (!selectedAttacker) { bShowToast('Сначала выберите атакующего'); return; }
+    doAttack(selectedAttacker, invId);
+  }
+}
+
 async function playCard(invId) {
+  if (isActionInProgress) return;
+  isActionInProgress = true;
   try {
     await apiFetch(`/api/battle/${currentBattleId}/play`, {
       method: 'POST', body: JSON.stringify({ inv_id: invId })
     });
-    await fetchBattleState();
   } catch (err) { bShowToast(err.message); }
+  isActionInProgress = false;
+  await fetchBattleState();
 }
 
 async function doAttack(attackerId, targetId) {
+  if (isActionInProgress) return;
+  isActionInProgress = true;
   try {
     await apiFetch(`/api/battle/${currentBattleId}/attack`, {
       method: 'POST',
       body: JSON.stringify({ attacker_id: attackerId, target_id: targetId })
     });
     selectedAttacker = null;
-    await fetchBattleState();
   } catch (err) { bShowToast(err.message); }
+  isActionInProgress = false;
+  await fetchBattleState();
 }
 
 async function attackPlayer() {
@@ -239,24 +236,57 @@ async function attackPlayer() {
 }
 
 async function endTurn() {
+  if (isActionInProgress) return;
+  isActionInProgress = true;
   try {
     await apiFetch(`/api/battle/${currentBattleId}/end-turn`, { method: 'POST' });
     selectedAttacker = null;
-    await fetchBattleState();
   } catch (err) { bShowToast(err.message); }
+  isActionInProgress = false;
+  await fetchBattleState();
 }
 
-async function surrender() {
-  if (!confirm) return;
-  // Кастомная модалка подтверждения
+function updateTimerDisplay() {
+  const el = document.getElementById('b-timer');
+  if (!el) return;
+  if (!currentBattleState || currentBattleState.status !== 'active' || !currentBattleState.turnStartedAt) {
+    el.textContent = '⏱ —';
+    el.style.color = '#666';
+    return;
+  }
+  const elapsed = Math.floor((Date.now() - currentBattleState.turnStartedAt) / 1000);
+  const remaining = Math.max(0, 60 - elapsed);
+  el.textContent = `⏱ ${remaining}с`;
+  if (remaining <= 10) el.style.color = '#e74c3c';
+  else if (remaining <= 30) el.style.color = '#f1c40f';
+  else el.style.color = '#2ecc71';
+
+  // Авто-переход: если мой ход и время истекло
+  if (remaining <= 0
+      && currentBattleState.currentTurnPlayer === currentPlayerKey
+      && !isActionInProgress
+      && currentBattleState.status === 'active') {
+    endTurn();
+  }
+}
+
+function handleSurrender() {
+  if (!currentBattleId || !currentBattleState) {
+    bShowToast('Бой не найден');
+    return;
+  }
+  if (currentBattleState.status !== 'active') {
+    leaveBattle();
+    return;
+  }
   document.getElementById('confirm-text').textContent = 'Вы уверены, что хотите сдаться?';
   document.getElementById('confirm-modal').style.display = 'flex';
   document.getElementById('btn-confirm-ok').onclick = async () => {
     document.getElementById('confirm-modal').style.display = 'none';
     try {
       await apiFetch(`/api/battle/${currentBattleId}/surrender`, { method: 'POST' });
-      await fetchBattleState();
     } catch (err) { bShowToast(err.message); }
+    await fetchBattleState();
   };
   document.getElementById('btn-confirm-cancel').onclick = () => {
     document.getElementById('confirm-modal').style.display = 'none';
@@ -272,19 +302,30 @@ function showBattleResult(kind) {
   else { title.textContent = 'НИЧЬЯ'; title.className = 'draw'; }
 }
 
-// Привязка событий
-document.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('b-end-turn').onclick = endTurn;
-  document.getElementById('b-surrender').onclick = surrender;
-  document.getElementById('b-result-back').onclick = leaveBattle;
+// Привязка событий — выполняется синхронно при загрузке battle.js
+// (скрипт подключён после DOM-элементов, поэтому элементы уже есть)
+(function bindBattleEvents() {
+  const endTurnBtn = document.getElementById('b-end-turn');
+  if (endTurnBtn) endTurnBtn.onclick = endTurn;
 
-  // Клик по HP соперника — атака героя
+  const surrenderBtn = document.getElementById('b-surrender');
+  if (surrenderBtn) {
+    surrenderBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      handleSurrender();
+    };
+  }
+
+  const resultBackBtn = document.getElementById('b-result-back');
+  if (resultBackBtn) resultBackBtn.onclick = leaveBattle;
+
   const oppInfoEl = document.querySelectorAll('.b-info')[0];
   if (oppInfoEl) {
     oppInfoEl.style.cursor = 'pointer';
     oppInfoEl.onclick = () => attackPlayer();
   }
-});
+})();
 
 window.joinBattle = joinBattle;
 window.leaveBattle = leaveBattle;
