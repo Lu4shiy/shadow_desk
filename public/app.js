@@ -941,7 +941,11 @@ async function loadInvites() {
           try {
             const res = await apiFetch('/api/battle/invite/accept', { method: 'POST', body: JSON.stringify({ invite_id: parseInt(btn.getAttribute('data-id')) }) });
             showToast('Бой начинается!', true);
-            if (res.battle_id && window.joinBattle) window.joinBattle(res.battle_id);
+            if (res.battle_id && typeof window.joinBattle === 'function') {
+              window.joinBattle(res.battle_id);
+            } else {
+              console.error('window.joinBattle is not defined!');
+            }
             loadInvites();
           } catch (err) { showToast(err.message); }
         };
@@ -1005,7 +1009,12 @@ async function loadInvites() {
           seen.push(b.id);
           sessionStorage.setItem('seen_battles', JSON.stringify(seen));
           showToast(`${b.nickname} принял приглашение!`, true);
-          if (window.joinBattle) window.joinBattle(b.battle_id);
+          if (typeof window.joinBattle === 'function') {
+            window.joinBattle(b.battle_id);
+          } else {
+            console.error('window.joinBattle is not defined!');
+            if (typeof showToast === 'function') showToast('Ошибка: система боя не загружена');
+          }
         }
       });
     }
@@ -1094,7 +1103,12 @@ function showOpponentFound(battleId) {
     mmSearchActive = false;
     const matchBtn = document.getElementById('btn-matchmaking');
     if (matchBtn) matchBtn.disabled = false;
-    if (window.joinBattle) window.joinBattle(battleId);
+    if (typeof window.joinBattle === 'function') {
+      window.joinBattle(battleId);
+    } else {
+      console.error('window.joinBattle is not defined!');
+      if (typeof showToast === 'function') showToast('Ошибка: система боя не загружена');
+    }
   }, 2000);
 }
 

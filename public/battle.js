@@ -90,50 +90,79 @@ function flashScreen(color) {
 
 // ==================== ЖИЗНЕННЫЙ ЦИКЛ ====================
 
-function joinBattle(battleId) {
-  if (currentBattleId === battleId) return;
-  currentBattleId = battleId;
-  currentBattleState = null;
-  currentPlayerKey = null;
-  currentOppDiscSec = 0;
-  oppDisconnectedSince = null;
-  selectedAttacker = null;
-  pendingCardId = null;
-  targetMode = null;
-  isActionInProgress = false;
-  fetchGen = 0;
-  lastAppliedGen = 0;
-  prevSnapshot = null;
-  sectionHashes = { oppHeader: '', myHeader: '', oppBoard: '', myBoard: '', hand: '' };
+function joinBattle(rawBattleId) {
+  try {
+    const battleId = parseInt(rawBattleId);
+    if (!battleId || isNaN(battleId)) {
+      console.error('joinBattle: invalid battleId', rawBattleId);
+      if (typeof showToast === 'function') showToast('Ошибка: некорректный ID боя');
+      return;
+    }
 
-  document.getElementById('b-opp-board').innerHTML = '<div class="b-board-empty">Загрузка...</div>';
-  document.getElementById('b-my-board').innerHTML = '<div class="b-board-empty">Загрузка...</div>';
-  document.getElementById('b-hand').innerHTML = '';
-  document.getElementById('b-opp-nick').textContent = '…';
-  document.getElementById('b-my-nick').textContent = '…';
-  document.getElementById('b-opp-hp-text').textContent = '…';
-  document.getElementById('b-my-hp-text').textContent = '…';
-  document.getElementById('b-energy-val').textContent = '…';
-  document.getElementById('b-timer').textContent = '⏱ …';
-  document.getElementById('b-opp-hp-bar').style.width = '100%';
-  document.getElementById('b-my-hp-bar').style.width = '100%';
-  const oppAv = document.getElementById('b-opp-avatar'); if (oppAv) oppAv.src = '';
-  const myAv = document.getElementById('b-my-avatar'); if (myAv) myAv.src = '';
-  document.getElementById('b-result').classList.remove('active');
-  document.getElementById('b-reconnect-overlay').classList.remove('active');
-  document.getElementById('b-target-hint').style.display = 'none';
+    const screen = document.getElementById('battle-screen');
+    if (!screen) {
+      console.error('joinBattle: #battle-screen not found');
+      return;
+    }
 
-  document.getElementById('battle-screen').classList.add('active');
+    // Если уже в этом бою и экран активен — ничего не делаем
+    if (currentBattleId === battleId && screen.classList.contains('active')) return;
 
-  fetchBattleState();
-  if (battlePollTimer) clearInterval(battlePollTimer);
-  battlePollTimer = setInterval(fetchBattleState, 1000);
+    currentBattleId = battleId;
+    currentBattleState = null;
+    currentPlayerKey = null;
+    currentOppDiscSec = 0;
+    oppDisconnectedSince = null;
+    selectedAttacker = null;
+    pendingCardId = null;
+    targetMode = null;
+    isActionInProgress = false;
+    fetchGen = 0;
+    lastAppliedGen = 0;
+    prevSnapshot = null;
+    sectionHashes = { oppHeader: '', myHeader: '', oppBoard: '', myBoard: '', hand: '' };
 
-  if (turnTimerInterval) clearInterval(turnTimerInterval);
-  turnTimerInterval = setInterval(() => {
-    updateTimerDisplay();
-    updateReconnectOverlayTick();
-  }, 500);
+    // Безопасный сброс UI
+    const setHtml = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
+    const setText = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+
+    setHtml('b-opp-board', '<div class="b-board-empty">Загрузка...</div>');
+    setHtml('b-my-board', '<div class="b-board-empty">Загрузка...</div>');
+    setHtml('b-hand', '');
+    setText('b-opp-nick', '…');
+    setText('b-my-nick', '…');
+    setText('b-opp-hp-text', '…');
+    setText('b-my-hp-text', '…');
+    setText('b-energy-val', '…');
+    setText('b-timer', '⏱ …');
+
+    const oppHpBar = document.getElementById('b-opp-hp-bar'); if (oppHpBar) oppHpBar.style.width = '100%';
+    const myHpBar = document.getElementById('b-my-hp-bar'); if (myHpBar) myHpBar.style.width = '100%';
+    const oppAv = document.getElementById('b-opp-avatar'); if (oppAv) oppAv.src = '';
+    const myAv = document.getElementById('b-my-avatar'); if (myAv) myAv.src = '';
+
+    const resultEl = document.getElementById('b-result'); if (resultEl) resultEl.classList.remove('active');
+    const reconnectEl = document.getElementById('b-reconnect-overlay'); if (reconnectEl) reconnectEl.classList.remove('active');
+    const targetHintEl = document.getElementById('b-target-hint'); if (targetHintEl) targetHintEl.style.display = 'none';
+
+    // Открываем экран
+    screen.classList.add('active');
+
+    // Запускаем поллинг и таймеры
+    fetchBattleState();
+    if (battlePollTimer) clearInterval(battlePollTimer);
+    battlePollTimer = setInterval(fetchBattleState, 1000);
+
+    if (turnTimerInterval) clearInterval(turnTimerInterval);
+    turnTimerInterval = setInterval(() => {
+      updateTimerDisplay();
+      updateReconnectOverlayTick();
+    }, 500);
+
+  } catch (e) {
+    console.error('joinBattle error:', e);
+    if (typeof showToast === 'function') showToast('Ошибка открытия боя');
+  }
 }
 
 function leaveBattle() {
@@ -680,5 +709,5 @@ document.addEventListener('keydown', (e) => {
   setupHandScroll();
 })();
 
-window.joinBattle = joinBattle;
-window.leaveBattle = leaveBattle;
+window.joinBattle = function(id) { joinBattle(id); };
+window.leaveBattle = function() { leaveBattle(); };
