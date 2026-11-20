@@ -817,9 +817,9 @@ app.get('/api/battle/:id', telegramAuth, playerAuth, loadBattle, async (req, res
       }
     }
 
-    // === Пауза таймера хода, если соперник отключён ===
+    // === Пауза таймера хода, если соперник отключён > 4с ===
     if (state.status === 'active') {
-      if (oppGoneSec > 8) {
+      if (oppGoneSec > 4) {
         if (!state.turnPausedAt) state.turnPausedAt = now;
       } else if (state.turnPausedAt) {
         state.turnStartedAt += (now - state.turnPausedAt);
@@ -829,7 +829,7 @@ app.get('/api/battle/:id', telegramAuth, playerAuth, loadBattle, async (req, res
 
     // === Авто-конец хода (только если соперник онлайн) ===
     if (state.status === 'active'
-        && oppGoneSec <= 8
+        && oppGoneSec <= 4
         && state.turnStartedAt
         && now - state.turnStartedAt > 60000) {
       const next = state.currentTurnPlayer === 'p1' ? 'p2' : 'p1';
@@ -853,7 +853,7 @@ app.get('/api/battle/:id', telegramAuth, playerAuth, loadBattle, async (req, res
         status: state.status,
         winner_id: req.battle.winner_id,
         state: view,
-        opponent_disconnected_sec: oppGoneSec > 8 ? Math.floor(oppGoneSec) : 0
+        opponent_disconnected_sec: oppGoneSec > 4 ? Math.floor(oppGoneSec) : 0
       }
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -988,8 +988,9 @@ app.post('/api/battle/:id/surrender', telegramAuth, playerAuth, loadBattle, asyn
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Активный бой (для reconnect-баннера)
-app.get('/api/battle/active', telegramAuth, playerAuth, async (req, res) => {
+// Активный бой (для reconnect-баннера). ВАЖНО: роут НЕ должен начинаться с /api/battle/,
+// иначе он конфликтует с /api/battle/:id (Express матчит в порядке объявления)
+app.get('/api/active-battle', telegramAuth, playerAuth, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT * FROM battles
@@ -1010,14 +1011,17 @@ app.get('/api/battle/active', telegramAuth, playerAuth, async (req, res) => {
     const myGoneSec = (now - myLastSeen) / 1000;
     const oppGoneSec = (now - oppLastSeen) / 1000;
 
-    // Таймауты
+    // Таймауты переподключения
     let finished = false;
     if (myGoneSec > 60 && oppGoneSec > 60) {
       state.status = 'finished'; state.winner = null; finished = true;
+      state.log.push('Оба не вернулись — ничья');
     } else if (oppGoneSec > 60) {
       state.status = 'finished'; state.winner = myKey; state[oppKey].hp = 0; finished = true;
+      state.log.push('Соперник не вернулся');
     } else if (myGoneSec > 60) {
       state.status = 'finished'; state.winner = oppKey; state[myKey].hp = 0; finished = true;
+      state.log.push('Вы не вернулись вовремя');
     }
 
     if (finished) {

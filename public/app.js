@@ -255,6 +255,21 @@ function showMain(profile) {
 
     // Проверяем активный бой (reconnect)
     checkActiveBattle();
+    // Повторные проверки: при возврате в приложение + каждые 5 секунд
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && mainScreen.style.display !== 'none') checkActiveBattle();
+    });
+    window.addEventListener('focus', () => {
+      if (mainScreen.style.display !== 'none') checkActiveBattle();
+    });
+    if (window._activeBattlePoller) clearInterval(window._activeBattlePoller);
+    window._activeBattlePoller = setInterval(() => {
+      if (mainScreen.style.display !== 'none' && document.getElementById('battle-screen').style.display !== 'flex') {
+        if (!document.getElementById('battle-screen').classList.contains('active')) {
+          checkActiveBattle();
+        }
+      }
+    }, 5000);
     
     document.getElementById('btn-open-case').onclick = async () => {
       if ((currentProfile.coins || 0) < 100) {
@@ -1116,7 +1131,7 @@ async function refreshProfile() {
 
 async function checkActiveBattle() {
   try {
-    const res = await apiFetch('/api/battle/active');
+    const res = await apiFetch('/api/active-battle');
     if (res.battle_id) {
       showActiveBattleBanner(res.battle_id, res.remaining_reconnect_sec || 60);
     } else {

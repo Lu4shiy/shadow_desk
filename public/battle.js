@@ -11,17 +11,18 @@ let isActionInProgress = false;
 let fetchGen = 0;
 let lastAppliedGen = 0;
 
-// Кэш прошлого состояния для вибрации
 let prevSnapshot = null;
+let oppDisconnectedSince = null; // ЛОКАЛЬНЫЙ timestamp первого обнаружения офлайна
 
-// Хеши секций
 let sectionHashes = { oppHeader: '', myHeader: '', oppBoard: '', myBoard: '', hand: '' };
 
-// Drag-state для руки
 let handPointerDown = false;
 let handWasDragged = false;
 let handStartX = 0;
 let handStartScroll = 0;
+
+const OPP_DISC_THRESHOLD = 4; // сек — после какого офлайна показывать overlay
+const OPP_DISC_LIMIT = 60;    // сек — сколько ждём соперника
 
 function bShowToast(msg, ok = false) {
   if (typeof showToast === 'function') showToast(msg, ok);
@@ -29,18 +30,36 @@ function bShowToast(msg, ok = false) {
 
 // ==================== ВИБРАЦИЯ ====================
 function vibrate(kind) {
+  // Визуальный флэш при тяжёлом уроне (работает везде, включая десктоп)
+  if (kind === 'heavy') {
+    const flash = document.getElementById('damage-flash');
+    if (flash) {
+      flash.style.opacity = '1';
+      setTimeout(() => { flash.style.opacity = '0'; }, 150);
+    }
+  }
+
+  // Telegram HapticFeedback (мобильный Telegram)
   try {
     const tg = window.Telegram?.WebApp;
-    if (tg?.HapticFeedback && typeof tg.HapticFeedback.impactOccurred === 'function') {
-      const style = kind === 'heavy' ? 'heavy' : kind === 'medium' ? 'medium' : 'light';
-      tg.HapticFeedback.impactOccurred(style);
+    if (tg?.HapticFeedback) {
+      const styleMap = { light: 'light', medium: 'medium', heavy: 'heavy' };
+      const style = styleMap[kind] || 'medium';
+      try { tg.HapticFeedback.impactOccurred(style); } catch (e) {}
+      if (kind === 'heavy') {
+        try { tg.HapticFeedback.notificationOccurred('error'); } catch (e) {}
+      } else {
+        try { tg.HapticFeedback.notificationOccurred('warning'); } catch (e) {}
+      }
       return;
     }
   } catch (e) {}
+
+  // Fallback — обычный браузер
   try {
     if (navigator.vibrate) {
-      const map = { light: 20, medium: 50, heavy: 100 };
-      navigator.vibrate(map[kind] || 50);
+      const patterns = { light: 20, medium: [30, 20, 30], heavy: [80, 40, 80] };
+      navigator.vibrate(patterns[kind] || [40]);
     }
   } catch (e) {}
 }
@@ -53,6 +72,7 @@ function joinBattle(battleId) {
   currentBattleState = null;
   currentPlayerKey = null;
   currentOppDiscSec = 0;
+  oppDisconnectedSince = null;
   selectedAttacker = null;
   isActionInProgress = false;
   fetchGen = 0;
@@ -60,7 +80,7 @@ function joinBattle(battleId) {
   prevSnapshot = null;
   sectionHashes = { oppHeader: '', myHeader: '', oppBoard: '', myBoard: '', hand: '' };
 
-  // Очищаем DOM от прошлого боя
+  // Очистка прошлого боя
   document.getElementById('b-opp-board').innerHTML = '<div class="b-board-empty">Загрузка...</div>';
   document.getElementById('b-my-board').innerHTML = '<div class="b-board-empty">Загрузка...</div>';
   document.getElementById('b-hand').innerHTML = '';
@@ -77,20 +97,17 @@ function joinBattle(battleId) {
   document.getElementById('b-result').classList.remove('active');
   document.getElementById('b-reconnect-overlay').classList.remove('active');
 
-  // Перепривязываем крестик (на случай если что-то отвалилось)
-  const surrenderBtn = document.getElementById('b-surrender');
-  if (surrenderBtn) {
-    surrenderBtn.onclick = (e) => { e.preventDefault(); e.stopPropagation(); handleSurrender(); };
-  }
-
   document.getElementById('battle-screen').classList.add('active');
 
   fetchBattleState();
   if (battlePollTimer) clearInterval(battlePollTimer);
-  battlePollTimer = setInterval(fetchBattleState, 2000);
+  battlePollTimer = setInterval(fetchBattleState, 1000); // ← каждую 1 сек
 
   if (turnTimerInterval) clearInterval(turnTimerInterval);
-  turnTimerInterval = setInterval(updateTimerDisplay, 500);
+  turnTimerInterval = setInterval(() => {
+    updateTimerDisplay();
+    updateReconnectOverlayTick(); // ← локальный тик 500мс
+  }, 500);
 }
 
 function leaveBattle() {
@@ -103,20 +120,19 @@ function leaveBattle() {
   currentBattleState = null;
   currentPlayerKey = null;
   currentOppDiscSec = 0;
+  oppDisconnectedSince = null;
   selectedAttacker = null;
   prevSnapshot = null;
-  // Проверяем активный бой после выхода
   if (typeof window.checkActiveBattle === 'function') window.checkActiveBattle();
 }
 
-// ==================== ПОЛУЧЕНИЕ СОСТОЯНИЯ ====================
+// ==================== ПОЛУЧЕНИЕ ====================
 
 async function fetchBattleState() {
   if (!currentBattleId) return;
   const myGen = ++fetchGen;
   try {
     const res = await apiFetch(`/api/battle/${currentBattleId}`);
-    // Если уже применён более свежий ответ — пропускаем
     if (myGen < lastAppliedGen) return;
     lastAppliedGen = myGen;
 
@@ -126,7 +142,7 @@ async function fetchBattleState() {
 
     renderBattle(res.battle);
     updateTimerDisplay();
-    updateReconnectOverlay();
+    updateReconnectOverlayTick();
     detectFeedback();
   } catch (err) {
     console.error('fetchBattle:', err);
@@ -151,11 +167,9 @@ function detectFeedback() {
   if (prevSnapshot) {
     let playerDamaged = false, characterDied = false;
 
-    // Любой игрок получил урон
     if (snap.myHp < prevSnapshot.myHp) playerDamaged = true;
     if (snap.oppHp < prevSnapshot.oppHp) playerDamaged = true;
 
-    // Персонаж погиб (свой или чужой)
     prevSnapshot.myBoard.forEach(id => { if (!snap.myBoard.has(id)) characterDied = true; });
     prevSnapshot.oppBoard.forEach(id => { if (!snap.oppBoard.has(id)) characterDied = true; });
 
@@ -187,7 +201,6 @@ function renderBattle(battle) {
   const me = st[myKey], opp = st[oppKey];
   const myTurn = st.currentTurnPlayer === myKey;
 
-  // Header соперника
   const oppHeaderHtml = `${opp.player?.avatar_url || ''}|${opp.player?.nickname || 'Соперник'}|${opp.hp}/${opp.maxHp}|${opp.handCount ?? (opp.hand ? opp.hand.length : 0)}`;
   if (hashStr(oppHeaderHtml) !== sectionHashes.oppHeader) {
     sectionHashes.oppHeader = hashStr(oppHeaderHtml);
@@ -199,7 +212,6 @@ function renderBattle(battle) {
     document.getElementById('b-opp-hp-text').textContent = `${Math.max(0, opp.hp)}/${opp.maxHp}`;
   }
 
-  // Header мой
   const myHeaderHtml = `${me.player?.avatar_url || ''}|${me.player?.nickname || 'Вы'}|${me.hp}/${me.maxHp}|${me.energy}/${me.maxEnergy}|${myTurn ? 1 : 0}|${st.status}`;
   if (hashStr(myHeaderHtml) !== sectionHashes.myHeader) {
     sectionHashes.myHeader = hashStr(myHeaderHtml);
@@ -232,7 +244,7 @@ function buildBoardHtml(boardInvIds, cards, ownerKey, otherKey, myTurn) {
     const isSelected = selectedAttacker === Number(invId);
     const isEnemyTarget = otherKey === currentPlayerKey && selectedAttacker !== null && ownerKey !== currentPlayerKey;
 
-    const cls = ['b-card'];
+    const cls = ['b-card-wrap'];
     if (canAttack) cls.push('can-attack');
     if (isSelected) cls.push('selected');
     if (!canAttack && c.hasAttacked && ownerKey === currentPlayerKey) cls.push('attacked');
@@ -241,9 +253,18 @@ function buildBoardHtml(boardInvIds, cards, ownerKey, otherKey, myTurn) {
     const imgUrl = cardImgUrl(c);
     const img = imgUrl
       ? `<img src="${imgUrl}" alt="" draggable="false" />`
-      : `<div style="width:100%;height:100%;background:#222;display:flex;justify-content:center;align-items:center;font-size:9px;text-align:center;padding:2px;">${c.name}</div>`;
+      : `<div style="width:100%;height:100%;background:#222;display:flex;justify-content:center;align-items:center;font-size:10px;text-align:center;padding:4px;">${c.name}</div>`;
 
-    return `<div class="${cls.join(' ')}" data-inv="${invId}" data-owner="${ownerKey}">${img}</div>`;
+    return `
+      <div class="${cls.join(' ')}" data-inv="${invId}" data-owner="${ownerKey}">
+        <div class="b-card">${img}</div>
+        <div class="b-stats">
+          <span class="atk">⚔${c.currentAtk}</span>
+          ${c.currentArmor > 0 ? `<span class="armor">🛡${c.currentArmor}</span>` : ''}
+          <span class="hp">❤${Math.max(0, c.currentHp)}</span>
+        </div>
+      </div>
+    `;
   }).join('');
 }
 
@@ -255,7 +276,7 @@ function renderBoardSection(containerId, board, cards, ownerKey, otherKey, myTur
 
   const container = document.getElementById(containerId);
   container.innerHTML = html;
-  container.querySelectorAll('.b-card').forEach(el => {
+  container.querySelectorAll('.b-card-wrap').forEach(el => {
     el.onclick = () => onBoardCardClick(el, ownerKey);
   });
 }
@@ -269,8 +290,18 @@ function buildHandHtml(hand, cards, energy, myTurn, active) {
     const imgUrl = cardImgUrl(c);
     const img = imgUrl
       ? `<img src="${imgUrl}" alt="" draggable="false" />`
-      : `<div style="width:100%;height:100%;background:#222;display:flex;justify-content:center;align-items:center;font-size:9px;text-align:center;padding:2px;">${c.name}</div>`;
-    return `<div class="hand-card ${playable ? 'playable' : 'not-playable'}" data-inv="${invId}">${img}</div>`;
+      : `<div style="width:100%;height:100%;background:#222;display:flex;justify-content:center;align-items:center;font-size:10px;text-align:center;padding:4px;">${c.name}</div>`;
+
+    const statsHtml = c.type === 'Персонаж'
+      ? `<div class="h-stats"><span class="atk">⚔${c.baseAtk}</span><span class="hp">❤${c.baseHp}</span></div>`
+      : `<div class="h-stats"><span class="cost">⚡${c.cost}</span></div>`;
+
+    return `
+      <div class="hand-card-wrap ${playable ? 'playable' : 'not-playable'}" data-inv="${invId}">
+        <div class="hand-card">${img}</div>
+        ${statsHtml}
+      </div>
+    `;
   }).join('');
 }
 
@@ -282,12 +313,12 @@ function renderHandSection(hand, cards, energy, myTurn, active) {
 
   const container = document.getElementById('b-hand');
   container.innerHTML = html;
-  container.querySelectorAll('.hand-card').forEach(el => {
+  container.querySelectorAll('.hand-card-wrap').forEach(el => {
     el.onclick = () => {
       if (handWasDragged) { handWasDragged = false; return; }
       const invId = parseInt(el.dataset.inv);
       if (!currentBattleState || currentBattleState.status !== 'active') return;
-      if (currentBattleState.currentTurnPlayer !== currentPlayerKey) return; // молча игнор
+      if (currentBattleState.currentTurnPlayer !== currentPlayerKey) return;
       playCard(invId);
     };
   });
@@ -297,7 +328,7 @@ function renderHandSection(hand, cards, energy, myTurn, active) {
 
 function onBoardCardClick(el, ownerKey) {
   if (!currentBattleState || currentBattleState.status !== 'active') return;
-  if (currentBattleState.currentTurnPlayer !== currentPlayerKey) return; // молча
+  if (currentBattleState.currentTurnPlayer !== currentPlayerKey) return;
 
   const invId = parseInt(el.dataset.inv);
   const st = currentBattleState;
@@ -306,6 +337,9 @@ function onBoardCardClick(el, ownerKey) {
     const c = st.cards[invId] || st.cards[String(invId)];
     if (!c || c.hasAttacked || c.currentAtk <= 0) return;
     selectedAttacker = (selectedAttacker === invId) ? null : invId;
+    // Форсируем перерисовку: сбрасываем хеши досок
+    sectionHashes.oppBoard = '';
+    sectionHashes.myBoard = '';
     renderBattle({ id: currentBattleId, playerKey: currentPlayerKey, status: st.status, state: st });
   } else {
     if (!selectedAttacker) return;
@@ -322,7 +356,7 @@ async function playCard(invId) {
     });
   } catch (err) { bShowToast(err.message); }
   isActionInProgress = false;
-  await fetchBattleState(); // теперь fetch не заблокирован
+  await fetchBattleState();
 }
 
 async function doAttack(attackerId, targetId) {
@@ -361,8 +395,7 @@ async function endTurn() {
 function updateTimerDisplay() {
   const el = document.getElementById('b-timer');
   if (!el) return;
-  // Пауза при переподключении соперника
-  if (currentOppDiscSec > 0) {
+  if (currentOppDiscSec > OPP_DISC_THRESHOLD) {
     el.style.color = '#666';
     return;
   }
@@ -386,20 +419,28 @@ function updateTimerDisplay() {
   }
 }
 
-// ==================== RECONNECT OVERLAY ====================
-function updateReconnectOverlay() {
+// ==================== RECONNECT OVERLAY (локальный тик) ====================
+function updateReconnectOverlayTick() {
   const overlay = document.getElementById('b-reconnect-overlay');
   const timerEl = document.getElementById('b-reconnect-timer');
-  if (!overlay) return;
+  if (!overlay || !timerEl) return;
 
-  if (currentOppDiscSec > 8 && currentBattleState && currentBattleState.status === 'active') {
-    overlay.classList.add('active');
-    const remaining = Math.max(0, 60 - currentOppDiscSec);
+  const active = currentBattleState && currentBattleState.status === 'active';
+
+  if (currentOppDiscSec >= OPP_DISC_THRESHOLD && active) {
+    if (!oppDisconnectedSince) {
+      // Первое обнаружение — устанавливаем локальную точку отсчёта
+      oppDisconnectedSince = Date.now() - currentOppDiscSec * 1000;
+    }
+    const goneSec = Math.floor((Date.now() - oppDisconnectedSince) / 1000);
+    const remaining = Math.max(0, OPP_DISC_LIMIT - goneSec);
     timerEl.textContent = remaining;
     if (remaining <= 10) timerEl.style.color = '#e74c3c';
     else if (remaining <= 30) timerEl.style.color = '#f1c40f';
     else timerEl.style.color = '#e74c3c';
+    overlay.classList.add('active');
   } else {
+    oppDisconnectedSince = null;
     overlay.classList.remove('active');
   }
 }
@@ -433,7 +474,7 @@ function showBattleResult(kind) {
   else { title.textContent = 'НИЧЬЯ'; title.className = 'draw'; }
 }
 
-// ==================== СКРОЛЛ РУКИ (pointer events) ====================
+// ==================== СКРОЛЛ РУКИ ====================
 function setupHandScroll() {
   const handEl = document.getElementById('b-hand');
   if (!handEl || handEl.dataset.scrollBound === '1') return;
@@ -461,13 +502,15 @@ function setupHandScroll() {
   const onUp = () => {
     handPointerDown = false;
     handEl.classList.remove('dragging');
-    // handWasDragged сбрасывается в click-обработчике карточки
   };
 
   handEl.addEventListener('pointerdown', onDown);
   handEl.addEventListener('pointermove', onMove);
   handEl.addEventListener('pointerup', onUp);
   handEl.addEventListener('pointercancel', onUp);
+  handEl.addEventListener('pointerleave', () => {
+    if (handPointerDown) onUp();
+  });
 
   handEl.addEventListener('wheel', (e) => {
     if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
@@ -488,7 +531,7 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// ==================== ПРИВЯЗКА СОБЫТИЙ ====================
+// ==================== ПРИВЯЗКА ====================
 (function bindBattleEvents() {
   const endTurnBtn = document.getElementById('b-end-turn');
   if (endTurnBtn) endTurnBtn.onclick = endTurn;
