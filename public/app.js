@@ -271,11 +271,17 @@ function showMain(profile) {
       }
     }, 5000);
     
+    let packOpening = false;
     document.getElementById('btn-open-case').onclick = async () => {
+      if (packOpening) return; // ← блок двойного клика
       if ((currentProfile.coins || 0) < 100) {
         showToast('Недостаточно монет. Нужно 100.');
         return;
       }
+
+      packOpening = true;
+      const btnEl = document.getElementById('btn-open-case');
+      btnEl.disabled = true;
 
       try {
         const res = await apiFetch('/api/shop/open', { method: 'POST' });
@@ -516,6 +522,9 @@ function showMain(profile) {
 
       } catch (err) {
         showToast(err.message);
+      } finally {
+        packOpening = false;
+        btnEl.disabled = false;
       }
     };
 
@@ -563,28 +572,22 @@ function updateInventoryUI() {
   const rarityWeight = { grey: 1, purple: 2, orange: 3, blue: 4, gold: 5 };
 
   filtered.sort((a, b) => {
-    let rarA = rarityWeight[a.rarity] || 0;
-    let rarB = rarityWeight[b.rarity] || 0;
-    let typeA = typeWeight[a.type] || 0;
-    let typeB = typeWeight[b.type] || 0;
+    const rarA = rarityWeight[a.rarity] || 0;
+    const rarB = rarityWeight[b.rarity] || 0;
+    const typeA = typeWeight[a.type] || 0;
+    const typeB = typeWeight[b.type] || 0;
 
-    if (sortBy === 'rarity-desc') {
-      if (rarB !== rarA) return rarB - rarA;
-      return typeA - typeB;
-    }
-    if (sortBy === 'rarity-asc') {
-      if (rarA !== rarB) return rarA - rarB;
-      return typeA - typeB;
-    }
-    if (sortBy === 'type-asc') {
-      if (typeA !== typeB) return typeA - typeB;
-      return rarB - rarA; // Внутри типа сначала лучшие
-    }
-    if (sortBy === 'type-desc') {
-      if (typeA !== typeB) return typeB - typeA;
-      return rarB - rarA; // Внутри типа сначала лучшие
-    }
-    return 0;
+    let primary = 0;
+    if (sortBy === 'rarity-desc') primary = (rarB - rarA) || (typeA - typeB);
+    else if (sortBy === 'rarity-asc') primary = (rarA - rarB) || (typeA - typeB);
+    else if (sortBy === 'type-asc') primary = (typeA - typeB) || (rarB - rarA);
+    else if (sortBy === 'type-desc') primary = (typeB - typeA) || (rarB - rarA);
+
+    if (primary !== 0) return primary;
+
+    // Третичный ключ: группируем одинаковые карты рядом
+    // a.id и b.id — это id карты из таблицы cards (c.id), не inv_id!
+    return a.id - b.id;
   });
 
   const container = document.getElementById('inventory-container');

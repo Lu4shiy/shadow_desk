@@ -86,6 +86,30 @@ pool.query(`ALTER TABLE battle_invites ADD COLUMN IF NOT EXISTS battle_id INTEGE
 // Миграция: стоимость карт
 pool.query(`ALTER TABLE cards ADD COLUMN IF NOT EXISTS cost INTEGER DEFAULT 1`).catch(()=>{});
 
+// Миграция: убрать все UNIQUE-констрейнты с player_inventory.
+// Игра разрешает дубликаты в инвентаре (каждый экземпляр — свой inv_id).
+// Если стоит UNIQUE (player_id, card_id) — паки падают с "duplicate key".
+(async () => {
+  try {
+    const constraintsRes = await pool.query(`
+      SELECT tc.constraint_name
+      FROM information_schema.table_constraints tc
+      WHERE tc.table_name = 'player_inventory'
+        AND tc.constraint_type = 'UNIQUE'
+    `);
+    for (const row of constraintsRes.rows) {
+      try {
+        await pool.query(`ALTER TABLE player_inventory DROP CONSTRAINT IF EXISTS "${row.constraint_name}"`);
+        console.log('Dropped UNIQUE constraint on player_inventory:', row.constraint_name);
+      } catch (e) {
+        console.error('Failed to drop constraint', row.constraint_name, ':', e.message);
+      }
+    }
+  } catch (e) {
+    console.error('player_inventory constraint cleanup:', e);
+  }
+})();
+
 // Таблица боёв
 pool.query(`
   CREATE TABLE IF NOT EXISTS battles (
@@ -246,12 +270,14 @@ app.put('/api/profile/avatar', telegramAuth, playerAuth, async (req, res) => {
 // Получить инвентарь игрока
 app.get('/api/inventory', telegramAuth, playerAuth, async (req, res) => {
   try {
+    // Сортируем: сначала по card_id (группирует одинаковые карты),
+    // внутри группы — новые сверху
     const result = await pool.query(`
       SELECT inv.id as inv_id, inv.level, inv.in_deck, inv.is_new, c.* 
       FROM player_inventory inv
       JOIN cards c ON inv.card_id = c.id
       WHERE inv.player_id = $1
-      ORDER BY inv.id DESC
+      ORDER BY c.id ASC, inv.id DESC
     `, [req.player.id]);
     res.json({ success: true, cards: result.rows });
   } catch (err) {
@@ -313,13 +339,17 @@ const PACK_COST = 100;
 const PACK_SIZE = 3;
 
 app.post('/api/shop/open', telegramAuth, playerAuth, async (req, res) => {
+  const client = await pool.connect();
   try {
-    // 1. Атомарно списываем монеты
-    const deductRes = await pool.query(
+    await client.query('BEGIN');
+
+    // 1. Атомарно списываем монеты (внутри транзакции)
+    const deductRes = await client.query(
       'UPDATE players SET coins = coins - $1 WHERE id = $2 AND coins >= $1 RETURNING coins',
       [PACK_COST, req.player.id]
     );
     if (deductRes.rows.length === 0) {
+      await client.query('ROLLBACK');
       return res.status(400).json({ error: `Недостаточно монет (нужно ${PACK_COST})` });
     }
 
@@ -338,16 +368,14 @@ app.post('/api/shop/open', telegramAuth, playerAuth, async (req, res) => {
       else if (roll < 12.84) rarity = 'orange';
       else if (roll < 31.48) rarity = 'purple';
 
-      // Исключаем уже выпавшие карты
-      let cardResult = await pool.query(
+      let cardResult = await client.query(
         `SELECT * FROM cards WHERE rarity = $1
          AND id <> ALL($2::int[])
          ORDER BY RANDOM() LIMIT 1`,
         [rarity, Array.from(usedCardIds)]
       );
       if (cardResult.rows.length === 0) {
-        // Fallback: любая не выпавшая карта
-        cardResult = await pool.query(
+        cardResult = await client.query(
           `SELECT * FROM cards WHERE id <> ALL($1::int[]) ORDER BY RANDOM() LIMIT 1`,
           [Array.from(usedCardIds)]
         );
@@ -358,12 +386,21 @@ app.post('/api/shop/open', telegramAuth, playerAuth, async (req, res) => {
       usedCardIds.add(card.id);
       cards.push(card);
 
-      await pool.query(
-        'INSERT INTO player_inventory (player_id, card_id, is_new) VALUES ($1, $2, TRUE)',
+      // ON CONFLICT DO NOTHING — страховка, если остались какие-то UNIQUE-констрейнты
+      await client.query(
+        `INSERT INTO player_inventory (player_id, card_id, is_new)
+         VALUES ($1, $2, TRUE)
+         ON CONFLICT DO NOTHING`,
         [req.player.id, card.id]
       );
     }
 
+    if (cards.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(500).json({ error: 'Не удалось сгенерировать карты' });
+    }
+
+    await client.query('COMMIT');
     res.json({
       success: true,
       cards,
@@ -371,7 +408,10 @@ app.post('/api/shop/open', telegramAuth, playerAuth, async (req, res) => {
       cost: PACK_COST
     });
   } catch (err) {
+    try { await client.query('ROLLBACK'); } catch (e) {}
     res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
   }
 });
 
@@ -811,15 +851,7 @@ const CARD_TARGETS = {
 
 const UNTARGETABLE = ['Дракон Бездны', 'Единорог'];
 
-function applyDamage(card, dmg) {
-  let remaining = dmg;
-  if (card.currentArmor > 0) {
-    const absorbed = Math.min(card.currentArmor, remaining);
-    card.currentArmor -= absorbed;
-    remaining -= absorbed;
-  }
-  if (remaining > 0) card.currentHp -= remaining;
-}
+// applyDamage уже объявлен выше (в блоке БОЕВОЙ ДВИЖОК) — не дублируем!
 
 function removeDead(state, ownerKey, invId) {
   const owner = state[ownerKey];
