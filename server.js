@@ -732,13 +732,15 @@ async function createBattle(player1Id, player2Id) {
 
   const playerMap = Object.fromEntries(playersRes.rows.map(p => [p.id, p]));
 
+  const now = Date.now();
   const state = {
-    p1: { player: playerMap[player1Id], hp: 30, maxHp: 30, energy: 10, maxEnergy: 10, hand: [], board: [], turnNumber: 0 },
-    p2: { player: playerMap[player2Id], hp: 30, maxHp: 30, energy: 10, maxEnergy: 10, hand: [], board: [], turnNumber: 0 },
+    p1: { player: playerMap[player1Id], hp: 30, maxHp: 30, energy: 10, maxEnergy: 10, hand: [], board: [], turnNumber: 0, lastSeen: now },
+    p2: { player: playerMap[player2Id], hp: 30, maxHp: 30, energy: 10, maxEnergy: 10, hand: [], board: [], turnNumber: 0, lastSeen: now },
     cards: {},
     currentTurnPlayer: 'p1',
     status: 'active',
     winner: null,
+    turnPausedAt: null,
     log: []
   };
 
@@ -766,6 +768,10 @@ async function loadBattle(req, res, next) {
     req.battle = battle;
     req.playerKey = battle.player1_id === req.player.id ? 'p1' : 'p2';
     req.oppKey = req.playerKey === 'p1' ? 'p2' : 'p1';
+    // Обновляем lastSeen игрока (in-memory, сохранится в saveBattleState или GET)
+    if (battle.state[req.playerKey]) {
+      battle.state[req.playerKey].lastSeen = Date.now();
+    }
     next();
   } catch (err) { res.status(500).json({ error: err.message }); }
 }
@@ -779,34 +785,75 @@ async function saveBattleState(battle) {
   );
 }
 
-// GET состояния боя (с фильтрацией руки соперника + проверкой таймаута)
+// GET состояния боя (с фильтрацией руки соперника + таймауты + пауза хода)
 app.get('/api/battle/:id', telegramAuth, playerAuth, loadBattle, async (req, res) => {
   try {
-    const liveState = req.battle.state;
+    const state = req.battle.state;
+    const myKey = req.playerKey;
+    const oppKey = req.oppKey;
+    const now = Date.now();
 
-    // Авто-переход при истечении 60с
-    if (liveState.status === 'active' && liveState.turnStartedAt
-        && Date.now() - liveState.turnStartedAt > 60000) {
-      const oppKey = liveState.currentTurnPlayer === 'p1' ? 'p2' : 'p1';
-      liveState.log.push('⏱ Время хода истекло');
-      startTurn(liveState, oppKey);
-      await saveBattleState(req.battle);
+    const oppLastSeen = state[oppKey]?.lastSeen || now;
+    const myLastSeen = state[myKey]?.lastSeen || now;
+    const oppGoneSec = (now - oppLastSeen) / 1000;
+    const myGoneSec = (now - myLastSeen) / 1000;
+
+    // === Таймауты переподключения ===
+    if (state.status === 'active') {
+      if (oppGoneSec > 60 && myGoneSec > 60) {
+        state.status = 'finished';
+        state.winner = null;
+        state.log.push('⏱ Оба игрока не вернулись — ничья');
+      } else if (oppGoneSec > 60) {
+        state.status = 'finished';
+        state.winner = myKey;
+        state[oppKey].hp = 0;
+        state.log.push('⏱ Соперник не вернулся — тех. поражение');
+      } else if (myGoneSec > 60) {
+        state.status = 'finished';
+        state.winner = oppKey;
+        state[myKey].hp = 0;
+        state.log.push('⏱ Вы не вернулись вовремя — тех. поражение');
+      }
     }
 
-    const state = JSON.parse(JSON.stringify(liveState));
-    const oppHand = state[req.oppKey].hand || [];
-    oppHand.forEach(id => { delete state.cards[id]; delete state.cards[String(id)]; });
-    state[req.oppKey].hand = [];
-    state[req.oppKey].handCount = oppHand.length;
+    // === Пауза таймера хода, если соперник отключён ===
+    if (state.status === 'active') {
+      if (oppGoneSec > 8) {
+        if (!state.turnPausedAt) state.turnPausedAt = now;
+      } else if (state.turnPausedAt) {
+        state.turnStartedAt += (now - state.turnPausedAt);
+        state.turnPausedAt = null;
+      }
+    }
+
+    // === Авто-конец хода (только если соперник онлайн) ===
+    if (state.status === 'active'
+        && oppGoneSec <= 8
+        && state.turnStartedAt
+        && now - state.turnStartedAt > 60000) {
+      const next = state.currentTurnPlayer === 'p1' ? 'p2' : 'p1';
+      state.log.push('⏱ Время хода истекло');
+      startTurn(state, next);
+    }
+
+    await saveBattleState(req.battle);
+
+    const view = JSON.parse(JSON.stringify(state));
+    const oppHand = view[oppKey].hand || [];
+    oppHand.forEach(id => { delete view.cards[id]; delete view.cards[String(id)]; });
+    view[oppKey].hand = [];
+    view[oppKey].handCount = oppHand.length;
 
     res.json({
       success: true,
       battle: {
         id: req.battle.id,
-        playerKey: req.playerKey,
-        status: req.battle.status,
+        playerKey: myKey,
+        status: state.status,
         winner_id: req.battle.winner_id,
-        state
+        state: view,
+        opponent_disconnected_sec: oppGoneSec > 8 ? Math.floor(oppGoneSec) : 0
       }
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -914,18 +961,77 @@ app.post('/api/battle/:id/end-turn', telegramAuth, playerAuth, loadBattle, async
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Сдаться
+// Сдаться / покинуть матч
 app.post('/api/battle/:id/surrender', telegramAuth, playerAuth, loadBattle, async (req, res) => {
   try {
     const state = req.battle.state;
     if (state.status !== 'active') return res.status(400).json({ error: 'Бой уже окончен' });
 
-    state.status = 'finished';
-    state.winner = req.oppKey;
-    state[req.playerKey].hp = 0;
-    state.log.push(`${req.playerKey === 'p1' ? 'Игрок 1' : 'Игрок 2'} сдался`);
+    const now = Date.now();
+    const oppLastSeen = state[req.oppKey]?.lastSeen || now;
+    const oppGoneSec = (now - oppLastSeen) / 1000;
+
+    if (oppGoneSec > 60) {
+      // Оба покинули — ничья
+      state.status = 'finished';
+      state.winner = null;
+      state.log.push('Оба игрока покинули матч — ничья');
+    } else {
+      state.status = 'finished';
+      state.winner = req.oppKey;
+      state[req.playerKey].hp = 0;
+      state.log.push('Сдача');
+    }
+
     await saveBattleState(req.battle);
     res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Активный бой (для reconnect-баннера)
+app.get('/api/battle/active', telegramAuth, playerAuth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM battles
+       WHERE status = 'active' AND (player1_id = $1 OR player2_id = $1)
+       ORDER BY id DESC LIMIT 1`,
+      [req.player.id]
+    );
+    if (result.rows.length === 0) return res.json({ success: true, battle_id: null });
+
+    const battle = result.rows[0];
+    const myKey = battle.player1_id === req.player.id ? 'p1' : 'p2';
+    const oppKey = myKey === 'p1' ? 'p2' : 'p1';
+    const state = battle.state;
+    const now = Date.now();
+
+    const myLastSeen = state[myKey]?.lastSeen || now;
+    const oppLastSeen = state[oppKey]?.lastSeen || now;
+    const myGoneSec = (now - myLastSeen) / 1000;
+    const oppGoneSec = (now - oppLastSeen) / 1000;
+
+    // Таймауты
+    let finished = false;
+    if (myGoneSec > 60 && oppGoneSec > 60) {
+      state.status = 'finished'; state.winner = null; finished = true;
+    } else if (oppGoneSec > 60) {
+      state.status = 'finished'; state.winner = myKey; state[oppKey].hp = 0; finished = true;
+    } else if (myGoneSec > 60) {
+      state.status = 'finished'; state.winner = oppKey; state[myKey].hp = 0; finished = true;
+    }
+
+    if (finished) {
+      await saveBattleState(battle);
+      return res.json({ success: true, battle_id: null, finished: true });
+    }
+
+    res.json({
+      success: true,
+      battle_id: battle.id,
+      my_gone_sec: Math.floor(myGoneSec),
+      opp_gone_sec: Math.floor(oppGoneSec),
+      remaining_reconnect_sec: Math.max(0, 60 - Math.floor(myGoneSec))
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

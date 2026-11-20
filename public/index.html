@@ -203,9 +203,9 @@
 
     .b-field { flex: 1; display: flex; flex-direction: column; gap: 4px; min-height: 0; }
     .b-board { display: flex; gap: 6px; justify-content: center; align-items: center;
-      min-height: 112px; padding: 6px; background: rgba(255,255,255,0.02);
+      min-height: 118px; padding: 6px; background: rgba(255,255,255,0.02);
       border-radius: 10px; border: 1px dashed #333; overflow-x: auto; overflow-y: hidden; flex-shrink: 0;
-      user-select: none; -webkit-user-select: none; }
+      user-select: none; -webkit-user-select: none; touch-action: pan-x; }
     .b-board.opp { border-color: rgba(231,76,60,0.3); }
     .b-board.me { border-color: rgba(46,204,113,0.3); }
     .b-board-empty { color: #444; font-size: 11px; text-align: center; width: 100%; }
@@ -213,19 +213,13 @@
     .b-vs { text-align: center; color: #555; font-family: 'Cinzel', serif;
       font-size: 11px; letter-spacing: 3px; }
 
-    .b-card { position: relative; width: 76px; height: 104px; border-radius: 7px; overflow: hidden;
+    .b-card { position: relative; width: 78px; height: 98px; border-radius: 7px; overflow: hidden;
       cursor: pointer; border: 2px solid #555; flex-shrink: 0; box-shadow: 0 3px 8px rgba(0,0,0,0.6); transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s; }
-    .b-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .b-card img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
     .b-card.can-attack { border-color: #2ecc71; box-shadow: 0 0 10px rgba(46,204,113,0.6); }
     .b-card.selected { border-color: #f1c40f; box-shadow: 0 0 14px #f1c40f; transform: translateY(-4px); }
     .b-card.attacked { opacity: 0.55; border-color: #444; }
     .b-card.enemy-target { border-color: #e74c3c; box-shadow: 0 0 10px rgba(231,76,60,0.6); }
-    .b-card .stat-row { position: absolute; bottom: 0; left: 0; right: 0; display: flex; justify-content: space-between;
-      padding: 1px 3px; background: rgba(0,0,0,0.85); font-size: 10px; font-weight: bold; }
-    .b-card .atk { color: #e74c3c; }
-    .b-card .hp { color: #2ecc71; }
-    .b-card .armor-badge { position: absolute; top: 2px; right: 2px; background: #3498db; color: #fff;
-      font-size: 9px; font-weight: bold; padding: 1px 4px; border-radius: 6px; }
 
     .b-bottom { display: flex; align-items: center; gap: 6px; }
     .b-energy { display: flex; align-items: center; gap: 4px; padding: 6px 10px; border-radius: 16px;
@@ -235,32 +229,34 @@
     #b-end-turn { padding: 9px 14px; font-size: 12px; width: auto;
       background: linear-gradient(135deg, #e67e22, #d35400); }
     #b-end-turn:disabled { opacity: 0.4; }
-    #b-surrender { position: absolute; top: 10px; right: 10px; width: 34px; height: 34px;
-      padding: 0; border-radius: 50%; background: #e74c3c; font-size: 16px; z-index: 100;
-      display: flex; justify-content: center; align-items: center; pointer-events: auto; }
+    #b-surrender { width: 36px; height: 36px; padding: 0; border-radius: 50%; background: #e74c3c;
+      font-size: 16px; display: flex; justify-content: center; align-items: center;
+      flex-shrink: 0; box-shadow: 0 2px 8px rgba(231,76,60,0.5); }
 
-    .b-hand { display: flex; gap: 5px; padding: 4px 0; overflow-x: auto; overflow-y: hidden;
-      min-height: 110px; align-items: flex-end;
+    /* Overlay переподключения соперника */
+    #b-reconnect-overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.88);
+      z-index: 150; display: none; flex-direction: column; justify-content: center;
+      align-items: center; gap: 20px; padding: 30px; text-align: center; }
+    #b-reconnect-overlay.active { display: flex; }
+    #b-reconnect-title { font-family: 'Cinzel', serif; font-size: 22px; color: #f1c40f; }
+    #b-reconnect-timer { font-size: 56px; font-weight: bold; color: #e74c3c; font-family: 'Montserrat', sans-serif; }
+    #b-reconnect-hint { font-size: 13px; color: #aaa; line-height: 1.5; max-width: 320px; }
+
+    .b-hand { display: flex; gap: 6px; padding: 4px 0; overflow-x: auto; overflow-y: hidden;
+      min-height: 124px; align-items: flex-end;
       user-select: none; -webkit-user-select: none;
-      cursor: grab; scrollbar-width: thin; scroll-behavior: smooth; }
+      cursor: grab; scrollbar-width: thin; scroll-behavior: smooth;
+      touch-action: pan-x; }
     .b-hand.dragging { cursor: grabbing; scroll-behavior: auto; }
     .b-hand::-webkit-scrollbar { height: 3px; }
     .b-hand::-webkit-scrollbar-thumb { background: #555; border-radius: 2px; }
-    .hand-card { position: relative; width: 76px; height: 104px; border-radius: 6px; overflow: hidden;
+    .hand-card { position: relative; width: 92px; height: 115px; border-radius: 6px; overflow: hidden;
       flex-shrink: 0; cursor: pointer; border: 2px solid #444; transition: transform 0.1s;
       user-select: none; -webkit-user-select: none; -webkit-user-drag: none; }
-    .hand-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
-    .hand-card:active { transform: scale(0.94); }
+    .hand-card img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+    .hand-card:active { transform: scale(0.96); }
     .hand-card.playable { border-color: #2ecc71; }
     .hand-card.not-playable { opacity: 0.45; }
-    .hand-card .cost { position: absolute; top: 2px; left: 2px; background: #3498db; color: #fff;
-      font-weight: bold; font-size: 12px; width: 20px; height: 20px; border-radius: 50%;
-      display: flex; justify-content: center; align-items: center; box-shadow: 0 1px 3px rgba(0,0,0,0.6); }
-    .hand-card .hc-stats { position: absolute; bottom: 0; left: 0; right: 0; display: flex;
-      justify-content: space-between; padding: 2px 4px; background: rgba(0,0,0,0.85);
-      font-size: 10px; font-weight: bold; }
-    .hand-card .hc-stats .atk { color: #e74c3c; }
-    .hand-card .hc-stats .hp { color: #2ecc71; }
 
     .b-turn-badge { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0.8);
       font-family: 'Cinzel', serif; font-size: 22px; color: #f1c40f; text-shadow: 0 0 20px #f1c40f;
@@ -535,10 +531,8 @@
 
   <!-- Экран боя -->
   <div id="battle-screen">
-    <button id="b-surrender" title="Сдаться">✕</button>
-
     <div class="b-header">
-      <div class="b-info">
+      <div class="b-info" style="flex:1;">
         <img id="b-opp-avatar" class="b-avatar" src="" />
         <div style="flex:1; min-width:0;">
           <div id="b-opp-nick" class="b-nick">Соперник</div>
@@ -546,6 +540,7 @@
           <div class="hp-bar"><div id="b-opp-hp-bar" class="hp-bar-fill" style="width:100%"></div><span id="b-opp-hp-text" class="hp-text">30/30</span></div>
         </div>
       </div>
+      <button id="b-surrender" title="Сдаться">✕</button>
     </div>
 
     <div class="b-field">
@@ -569,12 +564,41 @@
 
     <div id="b-hand" class="b-hand"></div>
 
-    <div id="b-turn-badge" class="b-turn-badge">ВАШ ХОД</div>
+
+
+    <div id="b-reconnect-overlay">
+      <div id="b-reconnect-title">Соперник переподключается…</div>
+      <div id="b-reconnect-timer">60</div>
+      <div id="b-reconnect-hint">Если он не вернётся — победа за вами.<br>Вы можете покинуть матч через ✕</div>
+    </div>
 
     <div id="b-result" class="b-result">
       <h1 id="b-result-title">Победа!</h1>
       <button id="b-result-back" style="width: 220px;">Вернуться в меню</button>
     </div>
+  </div>
+
+  <!-- Модалка сдачи боя (собственная, не конфликтует с logout) -->
+  <div id="b-surrender-modal" style="display:none; position:fixed; inset:0; z-index:6000;
+    background:rgba(0,0,0,0.88); flex-direction:column; justify-content:center; align-items:center; padding:30px; text-align:center;">
+    <h3 style="margin-bottom:15px; color:#e74c3c; font-family:'Cinzel',serif; font-size:20px;">Покинуть матч?</h3>
+    <p style="margin-bottom:20px; color:#ccc; font-size:14px; max-width:300px;">Это будет засчитано как поражение.</p>
+    <div style="display:flex; gap:10px; width:100%; max-width:300px;">
+      <button id="b-surr-cancel" style="flex:1; background:#333; box-shadow:none;">Отмена</button>
+      <button id="b-surr-ok" style="flex:1; background:#e74c3c;">Выйти</button>
+    </div>
+  </div>
+
+  <!-- Reconnect-баннер для главного экрана -->
+  <div id="active-battle-banner" style="display:none; position:fixed; top:60px; left:10px; right:10px; z-index:4500;
+    background:linear-gradient(135deg,#e74c3c,#c0392b); border-radius:12px; padding:12px 14px;
+    align-items:center; gap:10px; box-shadow:0 4px 15px rgba(231,76,60,0.5);">
+    <div style="flex:1; min-width:0;">
+      <div style="font-weight:bold; font-size:14px; color:#fff;">Активный бой</div>
+      <div id="active-battle-timer" style="font-size:12px; color:rgba(255,255,255,0.9);">Вернуться: 60с</div>
+    </div>
+    <button id="active-battle-join" style="width:auto; padding:10px 14px; font-size:13px; background:#2ecc71; box-shadow:none; flex-shrink:0;">Подключиться</button>
+    <button id="active-battle-leave" style="width:36px; padding:10px; font-size:14px; background:#333; box-shadow:none; flex-shrink:0;">✕</button>
   </div>
 
   <div id="toast">Текст ошибки</div>

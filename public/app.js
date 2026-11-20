@@ -224,6 +224,9 @@ function showMain(profile) {
       location.reload();
     };
 
+    // Обновляем данные профиля из БД (монеты и т.д.)
+    refreshProfile();
+
     // Логика переключения вкладок
     const navBtns = document.querySelectorAll('.nav-btn');
     const contents = document.querySelectorAll('.content');
@@ -249,6 +252,9 @@ function showMain(profile) {
 
     // Глобальный polling приглашений — работает на любой вкладке
     startBattlePolling();
+
+    // Проверяем активный бой (reconnect)
+    checkActiveBattle();
     
     document.getElementById('btn-open-case').onclick = async () => {
       if ((currentProfile.coins || 0) < 100) {
@@ -1093,5 +1099,83 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 });
+
+// ==================== АКТИВНЫЙ БОЙ (RECONNECT) ====================
+
+let activeBattleTimerInterval = null;
+
+async function refreshProfile() {
+  try {
+    const data = await apiFetch('/api/me');
+    currentProfile = data.profile;
+    document.getElementById('ui-coins').textContent = currentProfile.coins || 0;
+    document.getElementById('ui-crystals').textContent = currentProfile.crystals || 0;
+    document.getElementById('ui-mana').textContent = currentProfile.mana || 0;
+  } catch (e) {}
+}
+
+async function checkActiveBattle() {
+  try {
+    const res = await apiFetch('/api/battle/active');
+    if (res.battle_id) {
+      showActiveBattleBanner(res.battle_id, res.remaining_reconnect_sec || 60);
+    } else {
+      hideActiveBattleBanner();
+    }
+  } catch (e) {
+    console.error('checkActiveBattle:', e);
+  }
+}
+
+function showActiveBattleBanner(battleId, remainingSec) {
+  const banner = document.getElementById('active-battle-banner');
+  const timerEl = document.getElementById('active-battle-timer');
+  const joinBtn = document.getElementById('active-battle-join');
+  const leaveBtn = document.getElementById('active-battle-leave');
+  if (!banner) return;
+
+  banner.style.display = 'flex';
+
+  let remaining = Math.max(1, remainingSec);
+  timerEl.textContent = `Вернуться: ${remaining}с`;
+
+  if (activeBattleTimerInterval) clearInterval(activeBattleTimerInterval);
+  activeBattleTimerInterval = setInterval(() => {
+    remaining--;
+    timerEl.textContent = `Вернуться: ${remaining}с`;
+    if (remaining <= 0) {
+      clearInterval(activeBattleTimerInterval);
+      activeBattleTimerInterval = null;
+      apiFetch(`/api/battle/${battleId}/surrender`, { method: 'POST' }).catch(() => {});
+      hideActiveBattleBanner();
+    }
+  }, 1000);
+
+  joinBtn.onclick = () => {
+    if (activeBattleTimerInterval) clearInterval(activeBattleTimerInterval);
+    activeBattleTimerInterval = null;
+    hideActiveBattleBanner();
+    if (window.joinBattle) window.joinBattle(battleId);
+  };
+
+  leaveBtn.onclick = () => {
+    if (activeBattleTimerInterval) clearInterval(activeBattleTimerInterval);
+    activeBattleTimerInterval = null;
+    hideActiveBattleBanner();
+    apiFetch(`/api/battle/${battleId}/surrender`, { method: 'POST' }).catch(() => {});
+  };
+}
+
+function hideActiveBattleBanner() {
+  if (activeBattleTimerInterval) {
+    clearInterval(activeBattleTimerInterval);
+    activeBattleTimerInterval = null;
+  }
+  const banner = document.getElementById('active-battle-banner');
+  if (banner) banner.style.display = 'none';
+}
+
+window.checkActiveBattle = checkActiveBattle;
+window.refreshProfile = refreshProfile;
 
 init();
