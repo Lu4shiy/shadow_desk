@@ -941,10 +941,8 @@ async function loadInvites() {
           try {
             const res = await apiFetch('/api/battle/invite/accept', { method: 'POST', body: JSON.stringify({ invite_id: parseInt(btn.getAttribute('data-id')) }) });
             showToast('Бой начинается!', true);
-            if (res.battle_id && typeof window.joinBattle === 'function') {
-              window.joinBattle(res.battle_id);
-            } else {
-              console.error('window.joinBattle is not defined!');
+            if (res.battle_id) {
+              await tryJoinBattle(res.battle_id);
             }
             loadInvites();
           } catch (err) { showToast(err.message); }
@@ -1004,17 +1002,12 @@ async function loadInvites() {
     // Готовые бои (для инициатора)
     if (data.ready_battles && data.ready_battles.length > 0) {
       const seen = JSON.parse(sessionStorage.getItem('seen_battles') || '[]');
-      data.ready_battles.forEach(b => {
+      data.ready_battles.forEach(async b => {
         if (!seen.includes(b.id) && b.battle_id) {
           seen.push(b.id);
           sessionStorage.setItem('seen_battles', JSON.stringify(seen));
           showToast(`${b.nickname} принял приглашение!`, true);
-          if (typeof window.joinBattle === 'function') {
-            window.joinBattle(b.battle_id);
-          } else {
-            console.error('window.joinBattle is not defined!');
-            if (typeof showToast === 'function') showToast('Ошибка: система боя не загружена');
-          }
+          await tryJoinBattle(b.battle_id);
         }
       });
     }
@@ -1093,22 +1086,52 @@ function startBattlePolling() {
 
 let mmPollTimer = null;
 
+async function ensureBattleLoaded() {
+  if (typeof window.joinBattle === 'function') return true;
+
+  console.warn('[ensureBattleLoaded] battle.js не загружен, пробую загрузить заново...');
+
+  // 1. Попытка динамически подгрузить battle.js с cache-bust
+  const loaded = await new Promise((resolve) => {
+    const s = document.createElement('script');
+    s.src = 'battle.js?retry=' + Date.now();
+    s.onload = () => {
+      console.log('[ensureBattleLoaded] battle.js загружен динамически');
+      resolve(typeof window.joinBattle === 'function');
+    };
+    s.onerror = () => {
+      console.error('[ensureBattleLoaded] не удалось загрузить battle.js');
+      resolve(false);
+    };
+    document.head.appendChild(s);
+  });
+
+  return loaded;
+}
+
+async function tryJoinBattle(battleId) {
+  const ok = await ensureBattleLoaded();
+  if (ok) {
+    window.joinBattle(battleId);
+    return true;
+  }
+  if (typeof showToast === 'function') {
+    showToast('Ошибка: система боя не загружена (battle.js не найден)');
+  }
+  return false;
+}
+
 function showOpponentFound(battleId) {
   if (mmPollTimer) { clearInterval(mmPollTimer); mmPollTimer = null; }
   document.getElementById('mm-modal').style.display = 'none';
   document.getElementById('mm-found-modal').style.display = 'flex';
 
-  setTimeout(() => {
+  setTimeout(async () => {
     document.getElementById('mm-found-modal').style.display = 'none';
     mmSearchActive = false;
     const matchBtn = document.getElementById('btn-matchmaking');
     if (matchBtn) matchBtn.disabled = false;
-    if (typeof window.joinBattle === 'function') {
-      window.joinBattle(battleId);
-    } else {
-      console.error('window.joinBattle is not defined!');
-      if (typeof showToast === 'function') showToast('Ошибка: система боя не загружена');
-    }
+    await tryJoinBattle(battleId);
   }, 2000);
 }
 
@@ -1251,11 +1274,11 @@ function showActiveBattleBanner(battleId, remainingSec) {
     }
   }, 1000);
 
-  joinBtn.onclick = () => {
+  joinBtn.onclick = async () => {
     if (activeBattleTimerInterval) clearInterval(activeBattleTimerInterval);
     activeBattleTimerInterval = null;
     hideActiveBattleBanner();
-    if (window.joinBattle) window.joinBattle(battleId);
+    await tryJoinBattle(battleId);
   };
 
   leaveBtn.onclick = () => {
