@@ -938,6 +938,9 @@ async function loadInvites() {
 
       inList.querySelectorAll('.btn-accept-invite').forEach(btn => {
         btn.onclick = async () => {
+          if (btn.disabled) return;
+          btn.disabled = true;
+          btn.textContent = '...';
           try {
             const res = await apiFetch('/api/battle/invite/accept', { method: 'POST', body: JSON.stringify({ invite_id: parseInt(btn.getAttribute('data-id')) }) });
             showToast('Бой начинается!', true);
@@ -945,7 +948,11 @@ async function loadInvites() {
               await tryJoinBattle(res.battle_id);
             }
             loadInvites();
-          } catch (err) { showToast(err.message); }
+          } catch (err) { 
+            showToast(err.message);
+            btn.disabled = false;
+            btn.textContent = 'Принять';
+          }
         };
       });
       inList.querySelectorAll('.btn-decline-invite').forEach(btn => {
@@ -1086,37 +1093,13 @@ function startBattlePolling() {
 
 let mmPollTimer = null;
 
-async function ensureBattleLoaded() {
-  if (typeof window.joinBattle === 'function') return true;
-
-  console.warn('[ensureBattleLoaded] battle.js не загружен, пробую загрузить заново...');
-
-  // 1. Попытка динамически подгрузить battle.js с cache-bust
-  const loaded = await new Promise((resolve) => {
-    const s = document.createElement('script');
-    s.src = 'battle.js?retry=' + Date.now();
-    s.onload = () => {
-      console.log('[ensureBattleLoaded] battle.js загружен динамически');
-      resolve(typeof window.joinBattle === 'function');
-    };
-    s.onerror = () => {
-      console.error('[ensureBattleLoaded] не удалось загрузить battle.js');
-      resolve(false);
-    };
-    document.head.appendChild(s);
-  });
-
-  return loaded;
-}
-
 async function tryJoinBattle(battleId) {
-  const ok = await ensureBattleLoaded();
-  if (ok) {
+  if (typeof window.joinBattle === 'function') {
     window.joinBattle(battleId);
     return true;
   }
   if (typeof showToast === 'function') {
-    showToast('Ошибка: система боя не загружена (battle.js не найден)');
+    showToast('Ошибка: система боя не загружена (обновите страницу)');
   }
   return false;
 }

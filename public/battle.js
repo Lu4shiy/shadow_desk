@@ -108,6 +108,10 @@ function joinBattle(rawBattleId) {
     // Если уже в этом бою и экран активен — ничего не делаем
     if (currentBattleId === battleId && screen.classList.contains('active')) return;
 
+    // Жесткий сброс на случай, если висел предыдущий бой
+    if (battlePollTimer) { clearInterval(battlePollTimer); battlePollTimer = null; }
+    if (turnTimerInterval) { clearInterval(turnTimerInterval); turnTimerInterval = null; }
+
     currentBattleId = battleId;
     currentBattleState = null;
     currentPlayerKey = null;
