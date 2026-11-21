@@ -882,15 +882,15 @@ function checkBattleEnd(state) {
 }
 
 async function createBattle(player1Id, player2Id, clientOrPool = pool) {
-  const [deckRes1, deckRes2, playersRes] = await Promise.all([
-    clientOrPool.query(`SELECT inv.id as inv_id, c.* FROM player_inventory inv
+  // ВАЖНО: последовательные запросы, а НЕ Promise.all —
+  // postgres-клиент (из pool.connect()) не поддерживает параллельные запросы на одном соединении
+  const deckRes1 = await clientOrPool.query(`SELECT inv.id as inv_id, c.* FROM player_inventory inv
                         JOIN cards c ON inv.card_id = c.id
-                        WHERE inv.player_id = $1 AND inv.in_deck = TRUE`, [player1Id]),
-    clientOrPool.query(`SELECT inv.id as inv_id, c.* FROM player_inventory inv
+                        WHERE inv.player_id = $1 AND inv.in_deck = TRUE`, [player1Id]);
+  const deckRes2 = await clientOrPool.query(`SELECT inv.id as inv_id, c.* FROM player_inventory inv
                         JOIN cards c ON inv.card_id = c.id
-                        WHERE inv.player_id = $1 AND inv.in_deck = TRUE`, [player2Id]),
-    clientOrPool.query(`SELECT id, nickname, avatar_url, level FROM players WHERE id = ANY($1)`, [[player1Id, player2Id]])
-  ]);
+                        WHERE inv.player_id = $1 AND inv.in_deck = TRUE`, [player2Id]);
+  const playersRes = await clientOrPool.query(`SELECT id, nickname, avatar_url, level FROM players WHERE id = ANY($1)`, [[player1Id, player2Id]]);
 
   const deck1 = deckRes1.rows, deck2 = deckRes2.rows;
   if (deck1.length !== 12 || deck2.length !== 12) throw new Error('У обоих игроков должно быть по 12 карт в колоде');

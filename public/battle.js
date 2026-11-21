@@ -680,8 +680,14 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// ==================== ПРИВЯЗКА ====================
-(function bindBattleEvents() {
+// ==================== ЭКСПОРТ В WINDOW (сразу, до любой инициализации) ====================
+// Делаем ДО IIFE, чтобы даже если IIFE упадёт — joinBattle доступен из app.js
+window.joinBattle = function(id) { return joinBattle(id); };
+window.leaveBattle = function() { return leaveBattle(); };
+console.log('[battle.js] window.joinBattle установлен');
+
+// ==================== ПРИВЯЗКА (изолированно, чтобы не сломать экспорт) ====================
+try {
   const endTurnBtn = document.getElementById('b-end-turn');
   if (endTurnBtn) endTurnBtn.onclick = endTurn;
 
@@ -707,7 +713,7 @@ document.addEventListener('keydown', (e) => {
   if (targetCancel) targetCancel.onclick = cancelTargetMode;
 
   setupHandScroll();
-})();
-
-window.joinBattle = function(id) { joinBattle(id); };
-window.leaveBattle = function() { leaveBattle(); };
+  console.log('[battle.js] события привязаны');
+} catch (e) {
+  console.error('[battle.js] Ошибка при привязке событий:', e);
+}
