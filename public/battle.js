@@ -416,7 +416,6 @@ function onHandCardClick(invId) {
     return;
   }
 
-  const me = currentBattleState[currentPlayerKey];
   const oppKey = currentPlayerKey === 'p1' ? 'p2' : 'p1';
   const opp = currentBattleState[oppKey];
   const pool = targetReq === 'friendly' ? me.board : opp.board;
