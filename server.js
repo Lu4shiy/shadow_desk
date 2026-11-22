@@ -677,10 +677,11 @@ app.get('/api/battle/invites', telegramAuth, playerAuth, async (req, res) => {
 // Принять инвайт
 app.post('/api/battle/invite/accept', telegramAuth, playerAuth, async (req, res) => {
   const { invite_id } = req.body;
-  const client = await pool.connect();
+  let client = null;
   let transactionOpen = false;
 
   try {
+    client = await pool.connect();
     await client.query('BEGIN');
     transactionOpen = true;
 
@@ -720,7 +721,7 @@ app.post('/api/battle/invite/accept', telegramAuth, playerAuth, async (req, res)
       error: error.message || 'Не удалось принять приглашение'
     });
   } finally {
-    client.release();
+    if (client) client.release();
   }
 });
 
@@ -989,7 +990,7 @@ async function loadBattle(req, res, next) {
     return res.status(400).json({ error: 'Некорректный ID боя' });
   }
 
-  const client = await pool.connect();
+  let client = null;
   let transactionSettled = false;
   let clientReleased = false;
   const releaseClient = () => {
@@ -999,6 +1000,7 @@ async function loadBattle(req, res, next) {
   };
 
   try {
+    client = await pool.connect();
     await client.query('BEGIN');
     const result = await client.query('SELECT * FROM battles WHERE id = $1 FOR UPDATE', [battleId]);
     if (result.rows.length === 0) {
@@ -1692,7 +1694,7 @@ app.post('/api/battle/:id/surrender', telegramAuth, playerAuth, loadBattle, asyn
 
 // Активный бой (для reconnect-баннера)
 app.get('/api/active-battle', telegramAuth, playerAuth, async (req, res) => {
-  const client = await pool.connect();
+  let client = null;
   let transactionOpen = false;
 
   const commitResponse = async (payload) => {
@@ -1702,6 +1704,7 @@ app.get('/api/active-battle', telegramAuth, playerAuth, async (req, res) => {
   };
 
   try {
+    client = await pool.connect();
     await client.query('BEGIN');
     transactionOpen = true;
 
@@ -1784,14 +1787,14 @@ app.get('/api/active-battle', telegramAuth, playerAuth, async (req, res) => {
       remaining_reconnect_sec: Math.max(0, 60 - Math.floor(myGoneSec))
     });
   } catch (error) {
-    if (transactionOpen) {
+    if (transactionOpen && client) {
       try { await client.query('ROLLBACK'); } catch (rollbackError) {}
       transactionOpen = false;
     }
     console.error('active-battle failed:', error);
     if (!res.headersSent) return res.status(500).json({ error: error.message });
   } finally {
-    client.release();
+    if (client) client.release();
   }
 });
 
