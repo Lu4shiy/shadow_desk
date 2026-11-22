@@ -1008,11 +1008,9 @@ async function loadInvites() {
 
     // Готовые бои (для инициатора)
     if (data.ready_battles && data.ready_battles.length > 0) {
-      const seen = JSON.parse(sessionStorage.getItem('seen_battles') || '[]');
+      const seen = JSON.parse(sessionStorage.getItem('seen_battle_ids') || '[]');
       data.ready_battles.forEach(async b => {
-        if (!seen.includes(b.id) && b.battle_id) {
-          seen.push(b.id);
-          sessionStorage.setItem('seen_battles', JSON.stringify(seen));
+        if (b.battle_id && !seen.includes(b.battle_id)) {
           showToast(`${b.nickname} принял приглашение!`, true);
           await tryJoinBattle(b.battle_id);
         }
@@ -1092,16 +1090,45 @@ function startBattlePolling() {
 // ==================== ХУК В showMain ====================
 
 let mmPollTimer = null;
+const battleJoinInProgress = new Set();
 
 async function tryJoinBattle(battleId) {
-  if (typeof window.joinBattle === 'function') {
-    window.joinBattle(battleId);
+  const id = Number.parseInt(battleId, 10);
+  if (!Number.isInteger(id) || id <= 0) {
+    showToast('Не удалось открыть бой: некорректный ID');
+    return false;
+  }
+
+  if (battleJoinInProgress.has(id)) return true;
+  if (typeof window.joinBattle !== 'function') {
+    showToast('Система боя не загружена. Перезапустите приложение.');
+    return false;
+  }
+
+  battleJoinInProgress.add(id);
+  try {
+    // Сначала проверяем доступ к бою и фиксируем вход игрока на сервере.
+    const response = await apiFetch(`/api/battle/${id}`);
+    if (!response || !response.battle) {
+      throw new Error('Сервер не вернул состояние боя');
+    }
+
+    window.joinBattle(id);
+
+    // Отмечаем именно battle_id, а не invite_id: их последовательности не совпадают.
+    const seen = JSON.parse(sessionStorage.getItem('seen_battle_ids') || '[]');
+    if (!seen.includes(id)) {
+      seen.push(id);
+      sessionStorage.setItem('seen_battle_ids', JSON.stringify(seen));
+    }
     return true;
+  } catch (error) {
+    console.error('tryJoinBattle failed:', { battleId: id, error });
+    showToast(`Не удалось войти в бой: ${error.message || 'ошибка сервера'}`);
+    return false;
+  } finally {
+    battleJoinInProgress.delete(id);
   }
-  if (typeof showToast === 'function') {
-    showToast('Ошибка: система боя не загружена (обновите страницу)');
-  }
-  return false;
 }
 
 function showOpponentFound(battleId) {

@@ -660,6 +660,13 @@ app.get('/api/battle/invites', telegramAuth, playerAuth, async (req, res) => {
       WHERE bi.from_player_id = $1
         AND bi.status IN ('pending', 'accepted')
         AND bi.expires_at > NOW() - INTERVAL '5 minutes'
+        AND (
+          bi.status = 'pending'
+          OR EXISTS (
+            SELECT 1 FROM battles b
+            WHERE b.id = bi.battle_id AND b.status = 'active'
+          )
+        )
       ORDER BY bi.created_at DESC
     `, [req.player.id]);
 
@@ -685,32 +692,101 @@ app.post('/api/battle/invite/accept', telegramAuth, playerAuth, async (req, res)
     await client.query('BEGIN');
     transactionOpen = true;
 
-    // Блокируем само приглашение: два параллельных accept не создадут два боя.
+    // Блокируем приглашение, в том числе для безопасного повторного запроса.
     const inviteRes = await client.query(
-      'SELECT id, from_player_id, to_player_id FROM battle_invites WHERE id = $1 AND to_player_id = $2 AND status = $3 AND expires_at > NOW() FOR UPDATE',
-      [invite_id, req.player.id, 'pending']
+      'SELECT id, from_player_id, to_player_id, status, battle_id, (expires_at > NOW()) AS is_valid FROM battle_invites WHERE id = $1 AND to_player_id = $2 FOR UPDATE',
+      [invite_id, req.player.id]
     );
     if (inviteRes.rows.length === 0) {
       await client.query('ROLLBACK');
       transactionOpen = false;
-      return res.status(400).json({ error: 'Приглашение не найдено или истекло' });
+      return res.status(400).json({ error: 'Приглашение не найдено' });
     }
 
     const invite = inviteRes.rows[0];
-    await client.query(
-      'UPDATE battle_invites SET status = $1 WHERE id = $2',
-      ['accepted', invite.id]
+
+    // Повторное нажатие на уже принятое приглашение возвращает тот же активный бой.
+    if (invite.status === 'accepted' && invite.battle_id) {
+      const acceptedBattle = await client.query(
+        `SELECT id FROM battles
+         WHERE id = $1 AND status = 'active'
+           AND ((player1_id = $2 AND player2_id = $3)
+             OR (player1_id = $3 AND player2_id = $2))
+         FOR UPDATE`,
+        [invite.battle_id, invite.from_player_id, invite.to_player_id]
+      );
+
+      if (acceptedBattle.rows.length > 0) {
+        await client.query('COMMIT');
+        transactionOpen = false;
+        return res.json({
+          success: true,
+          invite,
+          battle_id: acceptedBattle.rows[0].id,
+          reused: true
+        });
+      }
+
+      await client.query('ROLLBACK');
+      transactionOpen = false;
+      return res.status(409).json({ error: 'Бой по этому приглашению уже завершён' });
+    }
+
+    if (invite.status !== 'pending') {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
+      return res.status(400).json({ error: 'Приглашение уже недействительно' });
+    }
+
+    if (!invite.is_valid) {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
+      return res.status(400).json({ error: 'Срок действия приглашения истёк' });
+    }
+
+    // Сериализуем встречные приглашения и матчмейкинг для одной пары игроков.
+    await lockBattlePlayers(client, invite.from_player_id, invite.to_player_id);
+
+    // Если встречное приглашение уже запустило бой, используем существующий матч.
+    const activePair = await client.query(
+      `SELECT id FROM battles
+       WHERE status = 'active'
+         AND ((player1_id = $1 AND player2_id = $2)
+           OR (player1_id = $2 AND player2_id = $1))
+       ORDER BY id DESC
+       LIMIT 1
+       FOR UPDATE`,
+      [invite.from_player_id, invite.to_player_id]
     );
 
-    const battleId = await createBattle(invite.from_player_id, invite.to_player_id, client);
+    const battleId = activePair.rows.length > 0
+      ? activePair.rows[0].id
+      : await createBattle(invite.from_player_id, invite.to_player_id, client);
+
     await client.query(
-      'UPDATE battle_invites SET battle_id = $1 WHERE id = $2',
+      `UPDATE battle_invites
+       SET status = 'accepted', battle_id = $1
+       WHERE id = $2`,
       [battleId, invite.id]
+    );
+
+    invite.status = 'accepted';
+    invite.battle_id = battleId;
+
+    // Закрываем встречный инвайт тем же боем, чтобы оба клиента получили один battle_id.
+    await client.query(
+      `UPDATE battle_invites
+       SET status = 'accepted', battle_id = $1
+       WHERE from_player_id = $2
+         AND to_player_id = $3
+         AND status = 'pending'
+         AND expires_at > NOW()`,
+      [battleId, invite.to_player_id, invite.from_player_id]
     );
 
     await client.query('COMMIT');
     transactionOpen = false;
-    return res.json({ success: true, invite, battle_id: battleId });
+    return res.json({ success: true, invite, battle_id: battleId, reused: activePair.rows.length > 0 });
   } catch (error) {
     if (transactionOpen) {
       try { await client.query('ROLLBACK'); } catch (rollbackError) {}
@@ -904,11 +980,7 @@ function checkBattleEnd(state) {
   else if (state.p2.hp <= 0) { state.status = 'finished'; state.winner = 'p1'; }
 }
 
-async function createBattle(player1Id, player2Id, client) {
-  if (!client || typeof client.query !== 'function' || typeof client.release !== 'function') {
-    throw new Error('Создание боя должно выполняться внутри транзакции');
-  }
-
+async function lockBattlePlayers(client, player1Id, player2Id) {
   const playerIds = [...new Set([Number(player1Id), Number(player2Id)])].sort((a, b) => a - b);
   if (playerIds.length !== 2 || playerIds.some(id => !Number.isInteger(id) || id <= 0)) {
     const error = new Error('Некорректные игроки для создания боя');
@@ -916,10 +988,19 @@ async function createBattle(player1Id, player2Id, client) {
     throw error;
   }
 
-  // Одинаковый порядок блокировок исключает дедлоки при встречных приглашениях.
+  // Единый порядок advisory-lock для приглашений и матчмейкинга.
   for (const playerId of playerIds) {
     await client.query('SELECT pg_advisory_xact_lock(92731, $1::int)', [playerId]);
   }
+  return playerIds;
+}
+
+async function createBattle(player1Id, player2Id, client) {
+  if (!client || typeof client.query !== 'function' || typeof client.release !== 'function') {
+    throw new Error('Создание боя должно выполняться внутри транзакции');
+  }
+
+  const playerIds = await lockBattlePlayers(client, player1Id, player2Id);
 
   // Один игрок не может одновременно оказаться в двух активных боях.
   const activeBattleRes = await client.query(
