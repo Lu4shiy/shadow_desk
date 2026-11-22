@@ -12,6 +12,7 @@ let targetMode = null;
 let isActionInProgress = false;
 let fetchGen = 0;
 let lastAppliedGen = 0;
+let resultShownBattleId = null;
 
 let prevSnapshot = null;
 let oppDisconnectedSince = null;
@@ -112,6 +113,7 @@ function joinBattle(rawBattleId) {
     if (battlePollTimer) { clearInterval(battlePollTimer); battlePollTimer = null; }
     if (turnTimerInterval) { clearInterval(turnTimerInterval); turnTimerInterval = null; }
 
+    if (currentBattleId !== battleId) resultShownBattleId = null;
     currentBattleId = battleId;
     currentBattleState = null;
     currentPlayerKey = null;
@@ -602,30 +604,45 @@ function showBattleResult(kind) {
   const overlay = document.getElementById('b-result');
   const title = document.getElementById('b-result-title');
   const rewardsEl = document.getElementById('b-rewards');
+  const isFirstResultForBattle = currentBattleId !== null && resultShownBattleId !== currentBattleId;
+
   overlay.classList.add('active');
-  
+
   if (kind === 'win') {
-    title.textContent = '🏆 ПОБЕДА'; title.className = 'win';
-    vibrate('heavy'); flashScreen('win');
+    title.textContent = '🏆 ПОБЕДА';
+    title.className = 'win';
+    if (isFirstResultForBattle) {
+      vibrate('heavy');
+      flashScreen('win');
+    }
   } else if (kind === 'lose') {
-    title.textContent = '💀 ПОРАЖЕНИЕ'; title.className = 'lose';
-    vibrate('heavy'); flashScreen('lose');
+    title.textContent = '💀 ПОРАЖЕНИЕ';
+    title.className = 'lose';
+    if (isFirstResultForBattle) {
+      vibrate('heavy');
+      flashScreen('lose');
+    }
   } else {
-    title.textContent = 'НИЧЬЯ'; title.className = 'draw';
-    flashScreen('draw');
+    title.textContent = 'НИЧЬЯ';
+    title.className = 'draw';
+    if (isFirstResultForBattle) flashScreen('draw');
   }
 
   if (currentBattleState && currentBattleState[currentPlayerKey] && currentBattleState[currentPlayerKey].rewards) {
     const r = currentBattleState[currentPlayerKey].rewards;
-    rewardsEl.innerHTML = `
-      <div>✨ Опыт: <span style="color:#f1c40f; float:right;">+${r.xp}</span></div>
-      <div>💰 Монеты: <span style="color:#f1c40f; float:right;">+${r.coins}</span></div>
-      <div>💧 Мана: <span style="color:#3498db; float:right;">+${r.mana}</span></div>
-      ${r.pack ? '<div style="color:#2ecc71; margin-top:5px;">🎁 Выпал пак с картой!</div>' : ''}
-    `;
+    rewardsEl.innerHTML =
+      '<div>✨ Опыт: <span style="color:#f1c40f; float:right;">+' + r.xp + '</span></div>' +
+      '<div>💰 Монеты: <span style="color:#f1c40f; float:right;">+' + r.coins + '</span></div>' +
+      '<div>💧 Мана: <span style="color:#3498db; float:right;">+' + r.mana + '</span></div>' +
+      (r.pack ? '<div style="color:#2ecc71; margin-top:5px;">🎁 Выпал пак с картой!</div>' : '');
     rewardsEl.style.display = 'block';
   } else {
     rewardsEl.style.display = 'none';
+  }
+
+  if (isFirstResultForBattle) {
+    resultShownBattleId = currentBattleId;
+    if (typeof window.refreshProfile === 'function') window.refreshProfile();
   }
 }
 
