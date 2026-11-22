@@ -296,7 +296,7 @@
 
     /* Синхронный старт матча — отметка времени приходит с сервера обоим игрокам. */
     .b-start-overlay { position: absolute; inset: 0; z-index: 140; display: none;
-      align-items: center; justify-content: center; padding: 20px; text-align: center;
+      align-items: center; justify-content: center; padding: 20px; text-align: center; pointer-events: none;
       background: rgba(5, 4, 12, 0.76); backdrop-filter: blur(4px); }
     .b-start-overlay.active { display: flex; }
     .b-start-panel { min-width: 220px; padding: 20px 28px; border: 1px solid rgba(241,196,15,0.65);
@@ -711,7 +711,7 @@
     transition: opacity 0.15s;"></div>
 
   <div id="toast">Текст ошибки</div>
-  <script src="battle.js?v=5"></script>
+  <script src="battle.js?v=6"></script>
   <script src="app.js?v=4"></script>
 
   <!-- Модальное окно открытия пака -->
