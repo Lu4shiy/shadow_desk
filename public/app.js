@@ -1010,8 +1010,8 @@ async function loadInvites() {
     if (data.ready_battles && data.ready_battles.length > 0) {
       const seen = JSON.parse(sessionStorage.getItem('seen_battles') || '[]');
       data.ready_battles.forEach(async b => {
-        if (!seen.includes(b.id) && b.battle_id) {
-          seen.push(b.id);
+        if (b.battle_id && !seen.includes(b.battle_id)) {
+          seen.push(b.battle_id);
           sessionStorage.setItem('seen_battles', JSON.stringify(seen));
           showToast(`${b.nickname} принял приглашение!`, true);
           await tryJoinBattle(b.battle_id);
@@ -1094,14 +1094,31 @@ function startBattlePolling() {
 let mmPollTimer = null;
 
 async function tryJoinBattle(battleId) {
-  if (typeof window.joinBattle === 'function') {
-    window.joinBattle(battleId);
+  const id = Number.parseInt(battleId, 10);
+  if (!Number.isInteger(id) || id <= 0) {
+    showToast('Не удалось открыть бой: некорректный ID');
+    return false;
+  }
+
+  if (typeof window.joinBattle !== 'function') {
+    showToast('Система боя не загружена. Перезапустите приложение.');
+    return false;
+  }
+
+  try {
+    // Сначала проверяем доступ к бою и фиксируем вход игрока на сервере.
+    const response = await apiFetch(`/api/battle/${id}`);
+    if (!response || !response.battle) {
+      throw new Error('Сервер не вернул состояние боя');
+    }
+
+    window.joinBattle(id);
     return true;
+  } catch (error) {
+    console.error('tryJoinBattle failed:', { battleId: id, error });
+    showToast(`Не удалось войти в бой: ${error.message || 'ошибка сервера'}`);
+    return false;
   }
-  if (typeof showToast === 'function') {
-    showToast('Ошибка: система боя не загружена (обновите страницу)');
-  }
-  return false;
 }
 
 function showOpponentFound(battleId) {
