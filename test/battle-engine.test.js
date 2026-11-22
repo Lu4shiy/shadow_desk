@@ -123,14 +123,14 @@ test('Взрывная волна damages every character on both players boards
   assert.equal(enemy.currentHp, 4);
 });
 
-test('Взрывная волна uses flat armor reduction without consuming armor', () => {
+test('Взрывная волна ignores armor and removes exactly 2 HP', () => {
   const state = newGame();
   const ally = addBoardCard(state, 'p1', 'Скелет-воин', 12, { currentHp: 6, currentArmor: 3 });
   const enemy = addBoardCard(state, 'p2', 'Гоблин-вор', 22, { currentHp: 6, currentArmor: 1 });
   playEffect(state, 'p1', 'Взрывная волна');
-  assert.equal(ally.currentHp, 6);
+  assert.equal(ally.currentHp, 4);
   assert.equal(ally.currentArmor, 3);
-  assert.equal(enemy.currentHp, 5);
+  assert.equal(enemy.currentHp, 4);
   assert.equal(enemy.currentArmor, 1);
 });
 
