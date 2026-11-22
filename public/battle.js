@@ -4,6 +4,7 @@ let currentBattleId = null;
 let currentBattleState = null;
 let currentPlayerKey = null;
 let currentOppDiscSec = 0;
+let serverTimeOffsetMs = 0;
 let battlePollTimer = null;
 let turnTimerInterval = null;
 let selectedAttacker = null;
@@ -195,11 +196,16 @@ function leaveBattleInternal() {
 async function fetchBattleState() {
   if (!currentBattleId) return;
   const myGen = ++fetchGen;
+  const fetchStartedAt = Date.now();
   try {
     const res = await apiFetch(`/api/battle/${currentBattleId}`);
     if (myGen < lastAppliedGen) return;
     lastAppliedGen = myGen;
 
+    if (Number.isFinite(Number(res.server_now))) {
+      const requestStartedAt = fetchStartedAt;
+      serverTimeOffsetMs = Number(res.server_now) - (requestStartedAt + Date.now()) / 2;
+    }
     currentBattleState = res.battle.state;
     currentPlayerKey = res.battle.playerKey;
     currentOppDiscSec = res.battle.opponent_disconnected_sec || 0;
@@ -269,12 +275,51 @@ function isValidTarget(card, ownerKey) {
 
 // ==================== РЕНДЕР ====================
 
+function isBattleStarted(st = currentBattleState) {
+  if (!st) return false;
+  if (st.countdownEnabled !== true) return st.status === 'active';
+  const startsAt = Number(st.battleStartsAt);
+  return Number.isFinite(startsAt) && startsAt > 0 && Date.now() + serverTimeOffsetMs >= startsAt;
+}
+
+function updateStartCountdown() {
+  const overlay = document.getElementById('b-start-overlay');
+  const title = document.getElementById('b-start-title');
+  const number = document.getElementById('b-start-countdown');
+  if (!overlay || !title || !number) return;
+
+  const st = currentBattleState;
+  if (!st || st.status !== 'active' || st.countdownEnabled !== true) {
+    overlay.classList.remove('active');
+    return;
+  }
+
+  const startsAt = Number(st.battleStartsAt);
+  if (!Number.isFinite(startsAt) || startsAt <= 0) {
+    title.textContent = 'ОЖИДАЕМ СОПЕРНИКА';
+    number.textContent = '…';
+    overlay.classList.add('active');
+    return;
+  }
+
+  const remainingMs = startsAt - (Date.now() + serverTimeOffsetMs);
+  if (remainingMs > 0) {
+    title.textContent = 'МАТЧ НАЧИНАЕТСЯ ЧЕРЕЗ';
+    number.textContent = String(Math.max(1, Math.ceil(remainingMs / 1000)));
+    overlay.classList.add('active');
+  } else {
+    overlay.classList.remove('active');
+  }
+}
+
 function renderBattle(battle) {
   const st = battle.state;
   const myKey = battle.playerKey;
   const oppKey = myKey === 'p1' ? 'p2' : 'p1';
   const me = st[myKey], opp = st[oppKey];
-  const myTurn = st.currentTurnPlayer === myKey;
+  const battleReady = isBattleStarted(st);
+  const myTurn = st.currentTurnPlayer === myKey && battleReady;
+  updateStartCountdown();
 
   const oppHeaderHtml = `${opp.player?.avatar_url || ''}|${opp.player?.nickname || 'Соперник'}|${opp.hp}/${opp.maxHp}|${opp.handCount ?? (opp.hand ? opp.hand.length : 0)}`;
   if (hashStr(oppHeaderHtml) !== sectionHashes.oppHeader) {
@@ -301,7 +346,7 @@ function renderBattle(battle) {
 
   renderBoardSection('b-opp-board', opp.board, st.cards, oppKey, myKey, myTurn, 'oppBoard');
   renderBoardSection('b-my-board', me.board, st.cards, myKey, oppKey, myTurn, 'myBoard');
-  renderHandSection(me.hand, st.cards, me.energy, myTurn, st.status === 'active');
+  renderHandSection(me.hand, st.cards, me.energy, myTurn, st.status === 'active' && battleReady);
 
   if (st.status === 'finished') {
     showBattleResult(st.winner === myKey ? 'win' : (st.winner === null ? 'draw' : 'lose'));
@@ -394,7 +439,9 @@ function renderHandSection(hand, cards, energy, myTurn, active) {
     el.onclick = () => {
       if (handWasDragged) { handWasDragged = false; return; }
       const invId = parseInt(el.dataset.inv);
+      if (el.classList.contains('not-playable')) return;
       if (!currentBattleState || currentBattleState.status !== 'active') return;
+      if (!isBattleStarted(currentBattleState)) return;
       if (currentBattleState.currentTurnPlayer !== currentPlayerKey) return;
       onHandCardClick(invId);
     };
@@ -407,6 +454,7 @@ function onHandCardClick(invId) {
   const me = currentBattleState[currentPlayerKey];
   const card = currentBattleState.cards[invId] || currentBattleState.cards[String(invId)];
   if (!card) return;
+  if (!isBattleStarted(currentBattleState)) return;
 
   if (card.cost > me.energy) {
     bShowToast('Недостаточно энергии');
@@ -453,6 +501,7 @@ function cancelTargetMode() {
 
 function onBoardCardClick(el, ownerKey) {
   if (!currentBattleState || currentBattleState.status !== 'active') return;
+  if (!isBattleStarted(currentBattleState)) return;
 
   const invId = parseInt(el.dataset.inv);
   const st = currentBattleState;
@@ -536,13 +585,14 @@ async function endTurn() {
 
 // ==================== ТАЙМЕР ====================
 function updateTimerDisplay() {
+  updateStartCountdown();
   const el = document.getElementById('b-timer');
   if (!el) return;
   if (currentOppDiscSec > OPP_DISC_THRESHOLD) { el.style.color = '#666'; return; }
-  if (!currentBattleState || currentBattleState.status !== 'active' || !currentBattleState.turnStartedAt) {
+  if (!currentBattleState || currentBattleState.status !== 'active' || !isBattleStarted(currentBattleState) || !currentBattleState.turnStartedAt) {
     el.textContent = '⏱ —'; el.style.color = '#666'; return;
   }
-  const elapsed = Math.floor((Date.now() - currentBattleState.turnStartedAt) / 1000);
+  const elapsed = Math.floor((Date.now() + serverTimeOffsetMs - currentBattleState.turnStartedAt) / 1000);
   const remaining = Math.max(0, 60 - elapsed);
   el.textContent = `⏱ ${remaining}с`;
   if (remaining <= 10) el.style.color = '#e74c3c';
@@ -562,6 +612,11 @@ function updateReconnectOverlayTick() {
   const timerEl = document.getElementById('b-reconnect-timer');
   if (!overlay || !timerEl) return;
   const active = currentBattleState && currentBattleState.status === 'active';
+  if (currentBattleState?.countdownEnabled === true && !isBattleStarted(currentBattleState)) {
+    oppDisconnectedSince = null;
+    overlay.classList.remove('active');
+    return;
+  }
 
   if (currentOppDiscSec >= OPP_DISC_THRESHOLD && active) {
     if (!oppDisconnectedSince) {

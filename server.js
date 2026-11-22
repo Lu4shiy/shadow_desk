@@ -965,13 +965,20 @@ function startTurn(state, playerKey) {
 }
 
 function applyDamage(card, dmg) {
-  let remaining = dmg;
-  if (card.currentArmor > 0) {
-    const absorbed = Math.min(card.currentArmor, remaining);
-    card.currentArmor -= absorbed;
-    remaining -= absorbed;
-  }
-  if (remaining > 0) card.currentHp -= remaining;
+  const attackDamage = Math.max(0, Number(dmg) || 0);
+  const armor = Math.max(0, Number(card.currentArmor) || 0);
+  const hpDamage = Math.max(0, attackDamage - armor);
+
+  // Броня — постоянная защита, а не дополнительный запас HP.
+  // Она не расходуется после удара.
+  if (hpDamage > 0) card.currentHp -= hpDamage;
+  return hpDamage;
+}
+
+function isBattleStarted(state) {
+  if (state.countdownEnabled !== true) return true;
+  const startsAt = Number(state.battleStartsAt);
+  return Number.isFinite(startsAt) && startsAt > 0 && Date.now() >= startsAt;
 }
 
 function checkBattleEnd(state) {
@@ -1050,6 +1057,8 @@ async function createBattle(player1Id, player2Id, client) {
     winner: null,
     turnPausedAt: null,
     createdAt: now,
+    countdownEnabled: true,
+    battleStartsAt: null,
     log: []
   };
 
@@ -1057,6 +1066,9 @@ async function createBattle(player1Id, player2Id, client) {
   deck2.forEach(c => { state.p2.hand.push(c.inv_id); state.cards[c.inv_id] = makeCardState(c); });
 
   startTurn(state, 'p1');
+  // Первый ход подготовлен, но 60-секундный таймер начнётся
+  // только после того, как оба клиента подтвердят вход в матч.
+  state.turnStartedAt = null;
 
   const result = await client.query(
     'INSERT INTO battles (player1_id, player2_id, state) VALUES ($1, $2, $3) RETURNING id',
@@ -1530,6 +1542,18 @@ app.get('/api/battle/:id', telegramAuth, playerAuth, loadBattle, async (req, res
     const oppKey = req.oppKey;
     const now = Date.now();
 
+    // Старт отсчитывается один раз на сервере, когда в бой вошли оба игрока.
+    if (state.status === 'active'
+        && state.countdownEnabled === true
+        && !state.battleStartsAt
+        && state.p1?.enteredBattle === true
+        && state.p2?.enteredBattle === true) {
+      state.battleStartsAt = now + 3000;
+      state.turnStartedAt = state.battleStartsAt;
+      state.turnPausedAt = null;
+      state.log.push('⚔️ Оба игрока готовы — матч начнётся через 3 секунды');
+    }
+
     const createdAt = state.createdAt || (req.battle.created_at ? new Date(req.battle.created_at).getTime() : now);
     const oppEntered = state[oppKey]?.enteredBattle === true;
     const oppLastSeen = oppEntered ? (state[oppKey]?.lastSeen || 0) : createdAt;
@@ -1544,7 +1568,8 @@ app.get('/api/battle/:id', telegramAuth, playerAuth, loadBattle, async (req, res
     }
 
     // === Пауза таймера хода, если соперник отключён > 4с ===
-    if (state.status === 'active') {
+    // До общей отметки старта ход ещё не идёт — паузить нечего.
+    if (state.status === 'active' && isBattleStarted(state)) {
       if (oppGoneSec > 4) {
         if (!state.turnPausedAt) state.turnPausedAt = now;
       } else if (state.turnPausedAt) {
@@ -1555,6 +1580,7 @@ app.get('/api/battle/:id', telegramAuth, playerAuth, loadBattle, async (req, res
 
     // === Авто-конец хода (только если соперник онлайн) ===
     if (state.status === 'active'
+        && isBattleStarted(state)
         && oppGoneSec <= 4
         && state.turnStartedAt
         && now - state.turnStartedAt > 60000) {
@@ -1573,6 +1599,7 @@ app.get('/api/battle/:id', telegramAuth, playerAuth, loadBattle, async (req, res
 
     res.json({
       success: true,
+      server_now: Date.now(),
       battle: {
         id: req.battle.id,
         playerKey: myKey,
@@ -1590,6 +1617,9 @@ app.post('/api/battle/:id/play', telegramAuth, playerAuth, loadBattle, async (re
   try {
     const state = req.battle.state;
     if (state.status !== 'active') return res.status(400).json({ error: 'Бой окончен' });
+    if (!isBattleStarted(state)) {
+      return res.status(409).json({ error: 'Матч ещё не начался' });
+    }
     if (state.turnStartedAt && Date.now() - state.turnStartedAt > 60000) {
       return res.status(400).json({ error: '⏱ Время хода истекло' });
     }
@@ -1663,6 +1693,9 @@ app.post('/api/battle/:id/attack', telegramAuth, playerAuth, loadBattle, async (
   try {
     const state = req.battle.state;
     if (state.status !== 'active') return res.status(400).json({ error: 'Бой окончен' });
+    if (!isBattleStarted(state)) {
+      return res.status(409).json({ error: 'Матч ещё не начался' });
+    }
     if (state.turnStartedAt && Date.now() - state.turnStartedAt > 60000) {
       return res.status(400).json({ error: '⏱ Время хода истекло' });
     }
@@ -1738,6 +1771,9 @@ app.post('/api/battle/:id/end-turn', telegramAuth, playerAuth, loadBattle, async
   try {
     const state = req.battle.state;
     if (state.status !== 'active') return res.status(400).json({ error: 'Бой окончен' });
+    if (!isBattleStarted(state)) {
+      return res.status(409).json({ error: 'Матч ещё не начался' });
+    }
     if (state.currentTurnPlayer !== req.playerKey) return res.status(400).json({ error: 'Не ваш ход' });
 
     startTurn(state, req.oppKey);
