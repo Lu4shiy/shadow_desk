@@ -189,7 +189,7 @@ test('Огненный маг immunity uses the shared global turn counter', () 
   const state = newGame();
   state.turnCounter = 5;
   const mage = addBoardCard(state, 'p1', 'Огненный маг', 71);
-  playEffect(state, 'p1', 'Огненный маг');
+  applyCardEffect(state, 'p1', 'p2', mage, mage.invId);
   assert.equal(mage.immuneNegativeUntilTurn, 8);
   for (const turn of [6, 7, 8]) {
     state.turnCounter = turn;
