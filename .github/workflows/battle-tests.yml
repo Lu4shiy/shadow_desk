@@ -27,5 +27,12 @@ jobs:
           node-version: 22
       - name: Install dependencies
         run: npm install
+      - name: Check JavaScript syntax
+        run: |
+          node --check server.js
+          node --check public/app.js
+          node --check public/battle.js
+          node --check battle-engine.js
+
       - name: Run automated battle tests
         run: npm test
