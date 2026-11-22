@@ -13,6 +13,7 @@ let targetMode = null;
 let isActionInProgress = false;
 let fetchGen = 0;
 let lastAppliedGen = 0;
+let battleFetchPromise = null;
 let resultShownBattleId = null;
 
 let prevSnapshot = null;
@@ -131,6 +132,7 @@ function joinBattleInternal(rawBattleId) {
     isActionInProgress = false;
     fetchGen = 0;
     lastAppliedGen = 0;
+    battleFetchPromise = null;
     prevSnapshot = null;
     sectionHashes = { oppHeader: '', myHeader: '', oppBoard: '', myBoard: '', hand: '' };
 
@@ -160,10 +162,9 @@ function joinBattleInternal(rawBattleId) {
     // Открываем экран
     screen.classList.add('active');
 
-    // Запускаем поллинг и таймеры
+    // Запускаем один запрос состояния за раз.
     fetchBattleState();
-    if (battlePollTimer) clearInterval(battlePollTimer);
-    battlePollTimer = setInterval(fetchBattleState, 1000);
+    startBattlePolling();
 
     if (turnTimerInterval) clearInterval(turnTimerInterval);
     turnTimerInterval = setInterval(() => {
@@ -185,6 +186,7 @@ function leaveBattleInternal() {
   document.getElementById('b-reconnect-overlay').classList.remove('active');
   document.getElementById('b-target-hint').style.display = 'none';
   currentBattleId = null;
+  battleFetchPromise = null;
   currentBattleState = null;
   currentPlayerKey = null;
   currentOppDiscSec = 0;
@@ -198,30 +200,61 @@ function leaveBattleInternal() {
 
 // ==================== ПОЛУЧЕНИЕ ====================
 
+function stopBattlePolling() {
+  if (battlePollTimer) {
+    clearInterval(battlePollTimer);
+    battlePollTimer = null;
+  }
+}
+
+function startBattlePolling() {
+  stopBattlePolling();
+  if (!currentBattleId) return;
+  battlePollTimer = setInterval(() => {
+    // Не создаём очередь запросов: предыдущий GET должен завершиться.
+    if (!isActionInProgress && !battleFetchPromise) fetchBattleState();
+  }, 1000);
+}
+
 async function fetchBattleState() {
   if (!currentBattleId) return;
+  // Опросы не должны накапливаться и конкурировать за FOR UPDATE в Neon.
+  if (battleFetchPromise) return battleFetchPromise;
+
+  const battleId = currentBattleId;
   const myGen = ++fetchGen;
   const fetchStartedAt = Date.now();
-  try {
-    const res = await apiFetch(`/api/battle/${currentBattleId}`);
-    if (myGen < lastAppliedGen) return;
-    lastAppliedGen = myGen;
 
-    if (Number.isFinite(Number(res.server_now))) {
-      const requestStartedAt = fetchStartedAt;
-      serverTimeOffsetMs = Number(res.server_now) - (requestStartedAt + Date.now()) / 2;
+  const request = (async () => {
+    try {
+      const res = await apiFetch(`/api/battle/${battleId}`);
+      if (battleId !== currentBattleId || myGen < lastAppliedGen) return;
+      lastAppliedGen = myGen;
+
+      if (Number.isFinite(Number(res.server_now))) {
+        serverTimeOffsetMs = Number(res.server_now) - (fetchStartedAt + Date.now()) / 2;
+      }
+      currentBattleState = res.battle.state;
+      currentPlayerKey = res.battle.playerKey;
+      currentOppDiscSec = res.battle.opponent_disconnected_sec || 0;
+
+      renderBattle(res.battle);
+      updateTimerDisplay();
+      updateReconnectOverlayTick();
+      detectFeedback();
+    } catch (err) {
+      console.error('fetchBattle:', err);
+      if (battleId === currentBattleId && err.message && err.message.includes('не найден')) {
+        leaveBattleInternal();
+      }
     }
-    currentBattleState = res.battle.state;
-    currentPlayerKey = res.battle.playerKey;
-    currentOppDiscSec = res.battle.opponent_disconnected_sec || 0;
+  })();
 
-    renderBattle(res.battle);
-    updateTimerDisplay();
-    updateReconnectOverlayTick();
-    detectFeedback();
-  } catch (err) {
-    console.error('fetchBattle:', err);
-    if (err.message && err.message.includes('не найден')) leaveBattleInternal();
+  battleFetchPromise = request;
+  try {
+    await request;
+  } finally {
+    if (battleFetchPromise === request) battleFetchPromise = null;
   }
 }
 
@@ -553,32 +586,45 @@ function onBoardCardClick(el, ownerKey) {
   }
 }
 
-async function doPlay(invId, targetId) {
-  if (isActionInProgress) return;
+async function performBattleAction(sendRequest, onSuccess = null) {
+  if (isActionInProgress || !currentBattleId) return;
+
+  const actionBattleId = currentBattleId;
   isActionInProgress = true;
+  stopBattlePolling();
+
   try {
-    const body = { inv_id: invId };
-    if (targetId) body.target_id = targetId;
-    await apiFetch(`/api/battle/${currentBattleId}/play`, {
-      method: 'POST', body: JSON.stringify(body)
-    });
-  } catch (err) { bShowToast(err.message); }
-  isActionInProgress = false;
-  await fetchBattleState();
+    // Дожидаемся завершения уже начатого GET: он держит блокировку строки боя.
+    if (battleFetchPromise) await battleFetchPromise;
+    await sendRequest(actionBattleId);
+    if (typeof onSuccess === 'function') onSuccess();
+  } catch (err) {
+    bShowToast(err.message);
+  } finally {
+    isActionInProgress = false;
+    if (currentBattleId === actionBattleId) {
+      await fetchBattleState();
+      startBattlePolling();
+    }
+  }
+}
+
+async function doPlay(invId, targetId) {
+  const body = { inv_id: invId };
+  if (targetId) body.target_id = targetId;
+  await performBattleAction(battleId => apiFetch(`/api/battle/${battleId}/play`, {
+    method: 'POST',
+    body: JSON.stringify(body)
+  }));
 }
 
 async function doAttack(attackerId, targetId) {
-  if (isActionInProgress) return;
-  isActionInProgress = true;
-  try {
-    await apiFetch(`/api/battle/${currentBattleId}/attack`, {
-      method: 'POST',
-      body: JSON.stringify({ attacker_id: attackerId, target_id: targetId })
-    });
+  await performBattleAction(battleId => apiFetch(`/api/battle/${battleId}/attack`, {
+    method: 'POST',
+    body: JSON.stringify({ attacker_id: attackerId, target_id: targetId })
+  }), () => {
     selectedAttacker = null;
-  } catch (err) { bShowToast(err.message); }
-  isActionInProgress = false;
-  await fetchBattleState();
+  });
 }
 
 async function attackPlayer() {
@@ -590,14 +636,11 @@ async function attackPlayer() {
 }
 
 async function endTurn() {
-  if (isActionInProgress) return;
-  isActionInProgress = true;
-  try {
-    await apiFetch(`/api/battle/${currentBattleId}/end-turn`, { method: 'POST' });
+  await performBattleAction(battleId => apiFetch(`/api/battle/${battleId}/end-turn`, {
+    method: 'POST'
+  }), () => {
     selectedAttacker = null;
-  } catch (err) { bShowToast(err.message); }
-  isActionInProgress = false;
-  await fetchBattleState();
+  });
 }
 
 // ==================== ТАЙМЕР ====================
@@ -662,10 +705,9 @@ function handleSurrender() {
 
   document.getElementById('b-surr-ok').onclick = async () => {
     modal.style.display = 'none';
-    try {
-      await apiFetch(`/api/battle/${currentBattleId}/surrender`, { method: 'POST' });
-    } catch (err) { bShowToast(err.message); }
-    await fetchBattleState();
+    await performBattleAction(battleId => apiFetch(`/api/battle/${battleId}/surrender`, {
+      method: 'POST'
+    }));
   };
   document.getElementById('b-surr-cancel').onclick = () => {
     modal.style.display = 'none';
