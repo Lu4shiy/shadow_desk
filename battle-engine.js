@@ -53,6 +53,13 @@ export function applyDamage(card, dmg) {
   if (hpDamage > 0) card.currentHp -= hpDamage;
   return hpDamage;
 }
+
+// Прямой урон снимает HP без учёта брони (например, Взрывная волна).
+export function applyDirectDamage(card, dmg) {
+  const damage = Math.max(0, Number(dmg) || 0);
+  if (damage > 0) card.currentHp -= damage;
+  return damage;
+}
 export function canPlayCard(player, card) {
   const cost = Number(card?.energyCost ?? card?.cost);
   return Boolean(player && card && player.skipMagicPhase !== true && Number.isFinite(cost) && cost >= 0 && Number(player.energy) >= cost);
@@ -167,6 +174,13 @@ export function resolveAttack(state, playerKey, oppKey, attackerIdRaw, targetRaw
     const target=state.cards[targetId]||state.cards[String(targetId)];
     if(!target||!opponent.board.map(Number).includes(targetId))fail('Цель не найдена');
     if(taunts.length&&!taunts.includes(targetId))fail('Сначала убейте Древнего голема');
+    if (opponent.heroShield) {
+      opponent.heroShield = false;
+      attacker.hasAttacked = true;
+      state.log.push(`🛡 Щит хаоса блокирует атаку ${attacker.name}`);
+      checkBattleEnd(state);
+      return { success: true, shielded: true };
+    }
     const dealt=applyDamage(target,attacker.currentAtk);attacker.hasAttacked=true;
     if(attacker.name==='Оборотень'&&attacker.currentHp>0){attacker.currentHp=Math.min(attacker.maxHp,attacker.currentHp+2);state.log.push('🐺 Оборотень лечится на 2 HP');}
     if(target.currentHp<=0&&attacker.name==='Пожиратель душ'){attacker.currentAtk+=2;state.log.push('👻 Пожиратель душ поглощает душу: +2 атаки');}
@@ -243,8 +257,8 @@ export function applyCardEffect(state, playerKey, oppKey, card, targetId) {
         [...state[ownerKey].board].forEach(id => {
           const target = getCard(id);
           if (!target) return;
-          const dealt = applyDamage(target, 2);
-          state.log.push(dealt > 0 ? `💥 ${target.name} теряет ${dealt} HP` : `🛡 ${target.name}: броня поглощает 2 урона`);
+          const dealt = applyDirectDamage(target, 2);
+          state.log.push(`💥 ${target.name} теряет ${dealt} HP (броня не действует)`);
         });
       }
       [...me.board].forEach(id => removeDead(state, playerKey, id));

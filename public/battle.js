@@ -27,6 +27,7 @@ let handStartScroll = 0;
 const OPP_DISC_THRESHOLD = 4;
 const OPP_DISC_LIMIT = 60;
 let lastMagicSkipNotice = null;
+let activeBoardSide = 'me';
 
 const CARD_TARGETS = {
   'Каменная кожа': 'friendly',
@@ -117,6 +118,9 @@ function joinBattleInternal(rawBattleId) {
 
     if (currentBattleId !== battleId) resultShownBattleId = null;
     currentBattleId = battleId;
+    activeBoardSide = 'me';
+    const battleScreen = document.getElementById('battle-screen');
+    if (battleScreen) battleScreen.classList.add('show-my-board');
     currentBattleState = null;
     currentPlayerKey = null;
     currentOppDiscSec = 0;
@@ -714,6 +718,20 @@ function showBattleResult(kind) {
   }
 }
 
+function toggleBattleBoard() {
+  activeBoardSide = activeBoardSide === 'me' ? 'opp' : 'me';
+  const screen = document.getElementById('battle-screen');
+  const control = document.querySelector('.b-vs');
+  if (screen) {
+    screen.classList.toggle('show-my-board', activeBoardSide === 'me');
+    screen.classList.toggle('show-opp-board', activeBoardSide === 'opp');
+  }
+  if (control) {
+    control.textContent = activeBoardSide === 'me' ? '↑ МОЁ ПОЛЕ · ПОКАЗАТЬ СОПЕРНИКА ↓' : '↑ ПОЛЕ СОПЕРНИКА · ПОКАЗАТЬ МОЁ ↓';
+    control.setAttribute('aria-label', activeBoardSide === 'me' ? 'Показать поле соперника' : 'Показать своё поле');
+  }
+}
+
 function setupBoardScroll() {
   document.querySelectorAll('.b-board').forEach(board => {
     if (board.dataset.boardScrollBound === '1') return;
@@ -845,6 +863,14 @@ try {
   if (oppInfoEl) {
     oppInfoEl.style.cursor = 'pointer';
     oppInfoEl.onclick = () => attackPlayer();
+  }
+
+  const boardToggle = document.querySelector('.b-vs');
+  if (boardToggle) {
+    boardToggle.setAttribute('role', 'button');
+    boardToggle.setAttribute('tabindex', '0');
+    boardToggle.onclick = toggleBattleBoard;
+    boardToggle.onkeydown = (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleBattleBoard(); } };
   }
 
   const targetCancel = document.getElementById('b-target-cancel');
