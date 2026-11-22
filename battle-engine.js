@@ -117,7 +117,7 @@ export function healHero(player, amount) {
   player.hp = Math.min(player.maxHp, player.hp + amount);
 }
 
-export export function returnDiscardedCards(state, playerKey, count, charactersOnly = false) {
+export function returnDiscardedCards(state, playerKey, count, charactersOnly = false) {
   const player = state[playerKey];
   if (!player || !Array.isArray(player.hand)) return [];
   const items = Object.entries(state.cards || {}).filter(([,c]) => c && c.ownerKey === playerKey && c.discarded && (!charactersOnly || c.type === 'Персонаж')).sort((a,b)=>(Number(b[1].discardedAt)||0)-(Number(a[1].discardedAt)||0)).slice(0,Math.max(0,Number(count)||0));
