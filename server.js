@@ -3,6 +3,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import pg from 'pg';
 import crypto from 'crypto';
+import { CARD_TARGETS, UNTARGETABLE, makeCardState, startTurn, applyDamage, isBattleStarted, checkBattleEnd, canPlayCard, spendCardEnergy, isNegativeTargetProtected, applyCardEffect, resolveAttack } from './battle-engine.js';
 
 const { Pool } = pg;
 const __filename = fileURLToPath(import.meta.url);
@@ -64,27 +65,6 @@ pool.query(`
 // На случай, если таблица уже была создана без battle_id
 pool.query(`ALTER TABLE battle_invites ADD COLUMN IF NOT EXISTS battle_id INTEGER`)
   .catch(err => console.error('Migration Error battle_id:', err));
-
-// Миграция: стоимости карт по редкости (если все ещё дефолтные)
-(async () => {
-  try {
-    await pool.query(`ALTER TABLE cards ADD COLUMN IF NOT EXISTS cost INTEGER DEFAULT 1`);
-    await pool.query(`
-      UPDATE cards SET cost = CASE
-        WHEN rarity = 'grey' THEN 1
-        WHEN rarity = 'purple' THEN 2
-        WHEN rarity = 'orange' THEN 3
-        WHEN rarity = 'blue' THEN 4
-        WHEN rarity = 'gold' THEN 5
-        ELSE 2
-      END
-      WHERE cost = 1 AND rarity != 'grey'
-    `);
-  } catch (e) { console.error('Cost migration:', e); }
-})();
-
-// Миграция: стоимость карт
-pool.query(`ALTER TABLE cards ADD COLUMN IF NOT EXISTS cost INTEGER DEFAULT 1`).catch(()=>{});
 
 // Миграция: убрать все UNIQUE-констрейнты с player_inventory.
 // Игра разрешает дубликаты в инвентаре (каждый экземпляр — свой inv_id).
@@ -917,76 +897,6 @@ app.post('/api/battle/matchmaking/cancel', telegramAuth, playerAuth, async (req,
 
 // ==================== БОЕВОЙ ДВИЖОК ====================
 
-function getRarityCost(rarity) {
-  return { grey: 1, purple: 2, orange: 3, blue: 4, gold: 5 }[rarity] || 2;
-}
-
-function makeCardState(c) {
-  return {
-    invId: c.inv_id,
-    cardId: c.id,
-    name: c.name,
-    type: c.type,
-    rarity: c.rarity,
-    description: c.description,
-    image_url: c.image_url,
-    cost: getRarityCost(c.rarity),
-    baseAtk: c.atk || 0,
-    baseArmor: c.armor || 0,
-    baseHp: c.hp || 0,
-    currentAtk: c.atk || 0,
-    currentArmor: c.armor || 0,
-    currentHp: c.hp || 0,
-    maxHp: c.hp || 0,
-    hasAttacked: false,
-    discarded: false
-  };
-}
-
-function startTurn(state, playerKey) {
-  const p = state[playerKey];
-  p.turnNumber++;
-  p.maxEnergy = 10;
-  const prev = Number.isFinite(p.energy) ? p.energy : 0;
-  p.energy = Math.min(10, prev + 1);
-  p.board.forEach(invId => {
-    const c = state.cards[invId] || state.cards[String(invId)];
-    if (!c) return;
-    c.hasAttacked = false;
-    // Лесной тролль лечит 1 HP в начале хода
-    if (c.name === 'Лесной тролль' && c.currentHp > 0) {
-      c.currentHp = Math.min(c.maxHp, c.currentHp + 1);
-    }
-  });
-  state.currentTurnPlayer = playerKey;
-  state.turnStartedAt = Date.now();
-  state.log.push(`Ход ${playerKey === 'p1' ? 'Игрока 1' : 'Игрока 2'} — энергия ${p.energy}`);
-  if (state.log.length > 30) state.log = state.log.slice(-30);
-}
-
-function applyDamage(card, dmg) {
-  const attackDamage = Math.max(0, Number(dmg) || 0);
-  const armor = Math.max(0, Number(card.currentArmor) || 0);
-  const hpDamage = Math.max(0, attackDamage - armor);
-
-  // Броня — постоянная защита, а не дополнительный запас HP.
-  // Она не расходуется после удара.
-  if (hpDamage > 0) card.currentHp -= hpDamage;
-  return hpDamage;
-}
-
-function isBattleStarted(state) {
-  if (state.countdownEnabled !== true) return true;
-  const startsAt = Number(state.battleStartsAt);
-  return Number.isFinite(startsAt) && startsAt > 0 && Date.now() >= startsAt;
-}
-
-function checkBattleEnd(state) {
-  if (state.p1.hp <= 0 && state.p2.hp <= 0) { state.status = 'finished'; state.winner = null; }
-  else if (state.p1.hp <= 0) { state.status = 'finished'; state.winner = 'p2'; }
-  else if (state.p2.hp <= 0) { state.status = 'finished'; state.winner = 'p1'; }
-}
-
 async function lockBattlePlayers(client, player1Id, player2Id) {
   const playerIds = [...new Set([Number(player1Id), Number(player2Id)])].sort((a, b) => a - b);
   if (playerIds.length !== 2 || playerIds.some(id => !Number.isInteger(id) || id <= 0)) {
@@ -1049,21 +959,22 @@ async function createBattle(player1Id, player2Id, client) {
   const playerMap = Object.fromEntries(playersRes.rows.map(p => [p.id, p]));
   const now = Date.now();
   const state = {
-    p1: { player: playerMap[player1Id], hp: 30, maxHp: 30, energy: 10, maxEnergy: 10, hand: [], board: [], turnNumber: 0, lastSeen: now, enteredBattle: false, heroShield: false },
-    p2: { player: playerMap[player2Id], hp: 30, maxHp: 30, energy: 10, maxEnergy: 10, hand: [], board: [], turnNumber: 0, lastSeen: now, enteredBattle: false, heroShield: false },
+    p1: { player: playerMap[player1Id], hp: 30, maxHp: 30, energy: 10, maxEnergy: 10, hand: [], board: [], turnNumber: 0, lastSeen: now, enteredBattle: false, heroShield: false, skipMagicPhase: false, skipNextMagicPhase: false },
+    p2: { player: playerMap[player2Id], hp: 30, maxHp: 30, energy: 10, maxEnergy: 10, hand: [], board: [], turnNumber: 0, lastSeen: now, enteredBattle: false, heroShield: false, skipMagicPhase: false, skipNextMagicPhase: false },
     cards: {},
     currentTurnPlayer: 'p1',
     status: 'active',
     winner: null,
     turnPausedAt: null,
+    turnCounter: 0,
     createdAt: now,
     countdownEnabled: true,
     battleStartsAt: null,
     log: []
   };
 
-  deck1.forEach(c => { state.p1.hand.push(c.inv_id); state.cards[c.inv_id] = makeCardState(c); });
-  deck2.forEach(c => { state.p2.hand.push(c.inv_id); state.cards[c.inv_id] = makeCardState(c); });
+  deck1.forEach(c => { state.p1.hand.push(c.inv_id); state.cards[c.inv_id] = makeCardState(c, 'p1'); });
+  deck2.forEach(c => { state.p2.hand.push(c.inv_id); state.cards[c.inv_id] = makeCardState(c, 'p2'); });
 
   startTurn(state, 'p1');
   // Первый ход подготовлен, но 60-секундный таймер начнётся
@@ -1243,297 +1154,6 @@ async function saveBattleState(battle, client) {
 
 // ==================== ЭФФЕКТЫ КАРТ ====================
 
-const CARD_TARGETS = {
-  'Каменная кожа': 'friendly',
-  'Отравленный клинок': 'enemy',
-  'Тёмный жрец': 'friendly',
-  'Проклятие слабости': 'enemy',
-  'Исцеляющий отвар': 'friendly',
-  'Теневой сгусток': 'enemy',
-  'Вампирский укус': 'enemy',
-  'Тёмное благословение': 'friendly',
-  'Удар души': 'enemy',
-  'Зеркальное отражение': 'friendly',
-  'Падающая звезда': 'enemy',
-};
-
-const UNTARGETABLE = ['Дракон Бездны', 'Единорог'];
-
-// applyDamage уже объявлен выше (в блоке БОЕВОЙ ДВИЖОК) — не дублируем!
-
-function removeDead(state, ownerKey, invId) {
-  const owner = state[ownerKey];
-  const card = state.cards[invId] || state.cards[String(invId)];
-  if (!card || card.currentHp > 0) return;
-
-  // Космо-Феникс: возрождается 1 раз с 5 HP
-  if (card.name === 'Космо-Феникс' && !card.hasRevived) {
-    card.hasRevived = true;
-    card.currentHp = 5;
-    state.log.push(`🔥 Космо-Феникс возрождается!`);
-    return;
-  }
-
-  owner.board = owner.board.filter(id => Number(id) !== Number(invId));
-  card.discarded = true;
-  state.log.push(`💀 ${card.name} погибает`);
-}
-
-function healHero(player, amount) {
-  player.hp = Math.min(player.maxHp, player.hp + amount);
-}
-
-function healCard(card, amount) {
-  card.currentHp = Math.min(card.maxHp, card.currentHp + amount);
-}
-
-function extraTurn(state, playerKey) {
-  const p = state[playerKey];
-  // НЕ трогаем энергию
-  p.board.forEach(invId => {
-    const c = state.cards[invId] || state.cards[String(invId)];
-    if (c) c.hasAttacked = false;
-  });
-  state.turnStartedAt = Date.now();
-  state.log.push(`⏳ Временной скачок! Таймер хода обновлён, атаки разблокированы`);
-}
-
-function applyCardEffect(state, playerKey, oppKey, card, targetId) {
-  const me = state[playerKey];
-  const opp = state[oppKey];
-  const getCard = (id) => state.cards[id] || state.cards[String(id)];
-  const target = targetId ? getCard(targetId) : null;
-
-  switch (card.name) {
-    // ===== GREY =====
-    case 'Скелет-воин':
-    case 'Гоблин-вор':
-    case 'Кот-фамильяр':
-    case 'Сырный вор ишка':
-      return;
-
-    case 'Каменная кожа': {
-      if (!target) return;
-      target.currentArmor += 3;
-      state.log.push(`${target.name} получает +3 брони`);
-      return;
-    }
-    case 'Отравленный клинок': {
-      if (!target) return;
-      applyDamage(target, 4);
-      state.log.push(`${target.name} получает 4 урона`);
-      if (target.currentHp <= 0) removeDead(state, oppKey, target.invId);
-      return;
-    }
-    case 'Шёпот теней': {
-      me.energy = Math.min(10, me.energy + 2);
-      state.log.push(`+2 энергии`);
-      return;
-    }
-    case 'Исцеляющий отвар': {
-      if (!target) return;
-      healCard(target, 4);
-      state.log.push(`${target.name} лечится на 4 HP`);
-      return;
-    }
-    case 'Теневой сгусток': {
-      if (!target) return;
-      applyDamage(target, 2);
-      state.log.push(`${target.name} получает 2 урона`);
-      if (target.currentHp <= 0) removeDead(state, oppKey, target.invId);
-      return;
-    }
-
-    // ===== PURPLE =====
-    case 'Лесной тролль':
-      return; // пассив обрабатывается в startTurn
-
-    case 'Тёмный жрец': {
-      if (!target) return;
-      healCard(target, 3);
-      state.log.push(`${target.name} лечится на 3 HP`);
-      return;
-    }
-    case 'Проклятие слабости': {
-      if (!target) return;
-      target.currentAtk = Math.max(0, target.currentAtk - 2);
-      state.log.push(`${target.name} теряет 2 урона`);
-      return;
-    }
-    case 'Взрывная волна': {
-      [...me.board].forEach(id => {
-        const c = getCard(id);
-        if (c) applyDamage(c, 2);
-      });
-      [...opp.board].forEach(id => {
-        const c = getCard(id);
-        if (c) applyDamage(c, 2);
-      });
-      [...me.board].forEach(id => removeDead(state, playerKey, id));
-      [...opp.board].forEach(id => removeDead(state, oppKey, id));
-      state.log.push(`💥 Взрыв наносит 2 урона всем персонажам`);
-      return;
-    }
-    case 'Кровавый ритуал': {
-      me.hp -= 3;
-      me.energy = Math.min(10, me.energy + 3);
-      state.log.push(`-3 HP герою, +3 энергии`);
-      return;
-    }
-    case 'Сказочный гриб':
-      return;
-
-    case 'Вампирский укус': {
-      if (!target) return;
-      applyDamage(target, 3);
-      healHero(me, 3);
-      state.log.push(`${target.name} получает 3 урона, вы лечитесь на 3`);
-      if (target.currentHp <= 0) removeDead(state, oppKey, target.invId);
-      return;
-    }
-    case 'Тёмное благословение': {
-      if (!target) return;
-      target.currentAtk += 2;
-      state.log.push(`${target.name} получает +2 урона`);
-      return;
-    }
-
-    // ===== ORANGE =====
-    case 'Призрачный рыцарь':
-      return;
-
-    case 'Огненный маг': {
-      const self = getCard(card.invId);
-      if (self) self.immuneNegativeUntil = (me.turnNumber || 0) + 3;
-      state.log.push(`Огненный маг защищён от негативных карт на 3 хода`);
-      return;
-    }
-    case 'Щит хаоса': {
-      me.heroShield = true;
-      state.log.push(`🛡 Щит хаоса активирован`);
-      return;
-    }
-    case 'Кража разума': {
-      opp.energy = Math.max(0, opp.energy - 3);
-      state.log.push(`Противник теряет 3 энергии`);
-      return;
-    }
-    case 'Оборотень':
-      return; // пассив в attack
-
-    case 'Добрый дух': {
-      healHero(me, 3);
-      state.log.push(`+3 HP герою`);
-      return;
-    }
-    case 'Удар души': {
-      if (!target) return;
-      applyDamage(target, 5);
-      state.log.push(`${target.name} получает 5 урона`);
-      if (target.currentHp <= 0) removeDead(state, oppKey, target.invId);
-      return;
-    }
-    case 'Зеркальное отражение': {
-      if (!target) return;
-      target.currentArmor += 4;
-      state.log.push(`${target.name} получает +4 брони`);
-      return;
-    }
-
-    // ===== BLUE =====
-    case 'Древний голем':
-      return; // пассив (taunt) в attack
-
-    case 'Пожиратель душ':
-      return; // пассив в attack
-
-    case 'Временной скачок': {
-      extraTurn(state, playerKey);
-      return;
-    }
-
-    case 'Единорог':
-      return; // пассив
-
-    case 'Кровавый договор': {
-      me.hp -= 5;
-      me.energy = Math.min(10, me.energy + 5);
-      state.log.push(`-5 HP герою, +5 энергии`);
-      return;
-    }
-    case 'Падающая звезда': {
-      if (!target) return;
-      applyDamage(target, 6);
-      state.log.push(`${target.name} получает 6 урона`);
-      if (target.currentHp <= 0) removeDead(state, oppKey, target.invId);
-      return;
-    }
-
-    // ===== GOLD =====
-    case 'Безумный клоун': {
-      [...opp.board].forEach(id => {
-        const c = getCard(id);
-        if (c) {
-          const dmg = Math.floor(Math.random() * 6) + 1;
-          applyDamage(c, dmg);
-          state.log.push(`🎭 Безумный клоун: ${dmg} урона ${c.name}`);
-        }
-      });
-      [...opp.board].forEach(id => removeDead(state, oppKey, id));
-      return;
-    }
-    case 'Архитектор реальности': {
-      healHero(me, 5);
-      state.log.push(`+5 HP герою`);
-      return;
-    }
-
-    case 'Дракон Бездны':
-      return; // пассив
-
-    case 'Облачный кит': {
-      me.board.forEach(id => {
-        const c = getCard(id);
-        if (c && Number(id) !== Number(card.invId)) healCard(c, 4);
-      });
-      state.log.push(`Все ваши персонажи лечатся на 4 HP`);
-      return;
-    }
-    case 'Король-мертвец': {
-      healHero(me, 10);
-      state.log.push(`+10 HP герою`);
-      return;
-    }
-    case 'Абсолютное безумие': {
-      if (opp.heroShield) {
-        opp.heroShield = false;
-        state.log.push(`Щит хаоса поглощает урон Абсолютного безумия`);
-      } else {
-        opp.hp -= 3;
-        state.log.push(`Противник теряет 3 HP`);
-      }
-      return;
-    }
-    case 'Апокалипсис': {
-      [...me.board].forEach(id => {
-        const c = getCard(id);
-        if (c) c.currentHp = 0;
-      });
-      [...opp.board].forEach(id => {
-        const c = getCard(id);
-        if (c) c.currentHp = 0;
-      });
-      [...me.board].forEach(id => removeDead(state, playerKey, id));
-      [...opp.board].forEach(id => removeDead(state, oppKey, id));
-      state.log.push(`☄️ Апокалипсис уничтожает всех персонажей`);
-      return;
-    }
-
-    case 'Космо-Феникс':
-      return; // пассив в removeDead
-  }
-}
-
 // GET состояния боя (с фильтрацией руки соперника + таймауты + пауза хода)
 app.get('/api/battle/:id', telegramAuth, playerAuth, loadBattle, async (req, res) => {
   try {
@@ -1632,7 +1252,8 @@ app.post('/api/battle/:id/play', telegramAuth, playerAuth, loadBattle, async (re
 
     const card = state.cards[invId] || state.cards[String(invId)];
     if (!card) return res.status(400).json({ error: 'Карта не найдена' });
-    if (p.energy < card.cost) return res.status(400).json({ error: 'Недостаточно энергии' });
+    if (p.skipMagicPhase) return res.status(400).json({ error: 'В этом ходу вы пропускаете фазу магии' });
+    if (!canPlayCard(p, card)) return res.status(400).json({ error: 'Недостаточно энергии' });
 
     if (card.type === 'Персонаж' && p.board.length >= 6) {
       return res.status(400).json({ error: 'На столе уже 6 персонажей' });
@@ -1662,14 +1283,14 @@ app.post('/api/battle/:id/play', telegramAuth, playerAuth, loadBattle, async (re
       if (UNTARGETABLE.includes(target.name) && isEnemy) {
         return res.status(400).json({ error: `${target.name} неуязвим к картам` });
       }
-      if (card.type === 'Негативная' && target.immuneNegativeUntil && (p.turnNumber || 0) <= target.immuneNegativeUntil) {
+      if (card.type === 'Негативная' && isNegativeTargetProtected(state, target, req.playerKey)) {
         return res.status(400).json({ error: 'Цель защищена от негативных карт' });
       }
     }
 
     // === Применение ===
     p.hand = p.hand.filter(id => Number(id) !== invId);
-    p.energy -= card.cost;
+    spendCardEnergy(p, card);
 
     if (card.type === 'Персонаж') {
       p.board.push(invId);
@@ -1677,6 +1298,7 @@ app.post('/api/battle/:id/play', telegramAuth, playerAuth, loadBattle, async (re
       state.log.push(`${card.name} выставлен на стол`);
     } else {
       card.discarded = true;
+      card.discardedAt = Date.now();
       state.log.push(`Сыграна карта: ${card.name}`);
     }
 
@@ -1701,71 +1323,12 @@ app.post('/api/battle/:id/attack', telegramAuth, playerAuth, loadBattle, async (
     }
     if (state.currentTurnPlayer !== req.playerKey) return res.status(400).json({ error: 'Не ваш ход' });
 
-    const p = state[req.playerKey], opp = state[req.oppKey];
-    const attackerId = parseInt(req.body.attacker_id);
-    const targetRaw = req.body.target_id;
+    resolveAttack(state, req.playerKey, req.oppKey, req.body.attacker_id, req.body.target_id);
 
-    const attacker = state.cards[attackerId] || state.cards[String(attackerId)];
-    if (!attacker || !p.board.map(Number).includes(attackerId)) {
-      return res.status(400).json({ error: 'Атакующий не на столе' });
-    }
-    if (attacker.hasAttacked) return res.status(400).json({ error: 'Эта карта уже атаковала' });
-    if (attacker.currentAtk <= 0) return res.status(400).json({ error: 'Нет атаки' });
-
-    // Taunt: если у соперника есть Древний голем — обязаны бить только его
-    const tauntIds = opp.board.map(Number).filter(id => {
-      const c = state.cards[id] || state.cards[String(id)];
-      return c && c.name === 'Древний голем' && c.currentHp > 0;
-    });
-
-    if (targetRaw === 'player') {
-      if (opp.board.length > 0) return res.status(400).json({ error: 'Сначала убейте всех персонажей соперника' });
-      if (tauntIds.length > 0) return res.status(400).json({ error: 'Сначала убейте Древнего голема' });
-
-      if (opp.heroShield) {
-        opp.heroShield = false;
-        state.log.push(`🛡 Щит хаоса поглощает ${attacker.currentAtk} урона`);
-      } else {
-        opp.hp -= attacker.currentAtk;
-        state.log.push(`${attacker.name} бьёт игрока на ${attacker.currentAtk}`);
-      }
-      attacker.hasAttacked = true;
-    } else {
-      const targetId = parseInt(targetRaw);
-      const target = state.cards[targetId] || state.cards[String(targetId)];
-      if (!target || !opp.board.map(Number).includes(targetId)) {
-        return res.status(400).json({ error: 'Цель не найдена' });
-      }
-
-      if (tauntIds.length > 0 && !tauntIds.includes(targetId)) {
-        return res.status(400).json({ error: 'Сначала убейте Древнего голема' });
-      }
-
-      applyDamage(target, attacker.currentAtk);
-      attacker.hasAttacked = true;
-
-      // Оборотень лечится на 2 HP при атаке
-      if (attacker.name === 'Оборотень' && attacker.currentHp > 0) {
-        attacker.currentHp = Math.min(attacker.maxHp, attacker.currentHp + 2);
-        state.log.push(`🐺 Оборотень лечится на 2 HP`);
-      }
-
-      // Пожиратель душ: +2 к атаке при убийстве
-      if (target.currentHp <= 0 && attacker.name === 'Пожиратель душ') {
-        attacker.currentAtk += 2;
-        state.log.push(`👻 Пожиратель душ поглощает душу: +2 атаки`);
-      }
-
-      removeDead(state, req.oppKey, targetId);
-      if (attacker.currentHp <= 0) removeDead(state, req.playerKey, attackerId);
-    }
-
-    checkBattleEnd(state);
     await saveBattleState(req.battle, req.battleClient);
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
 });
-
 // Конец хода
 app.post('/api/battle/:id/end-turn', telegramAuth, playerAuth, loadBattle, async (req, res) => {
   try {

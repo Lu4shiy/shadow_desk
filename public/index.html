@@ -206,7 +206,9 @@
     .b-board { display: flex; gap: 8px; justify-content: center; align-items: center;
       min-height: 216px; padding: 8px; background: rgba(255,255,255,0.02);
       border-radius: 10px; border: 1px dashed #333; overflow-x: auto; overflow-y: hidden; flex: 0 0 auto;
-      user-select: none; -webkit-user-select: none; touch-action: pan-x; }
+      user-select: none; -webkit-user-select: none; touch-action: pan-y;
+      -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; cursor: grab; }
+    .b-board.dragging { cursor: grabbing; scroll-behavior: auto; }
     .b-board.opp { border-color: rgba(231,76,60,0.3); }
     .b-board.me { border-color: rgba(46,204,113,0.3); }
     .b-board-empty { color: #444; font-size: 11px; text-align: center; width: 100%; align-self: center; }
@@ -711,7 +713,7 @@
     transition: opacity 0.15s;"></div>
 
   <div id="toast">Текст ошибки</div>
-  <script src="battle.js?v=6"></script>
+  <script src="battle.js?v=7"></script>
   <script src="app.js?v=4"></script>
 
   <!-- Модальное окно открытия пака -->
