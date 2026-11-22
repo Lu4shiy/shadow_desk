@@ -994,7 +994,7 @@ async function loadBattle(req, res, next) {
   let transactionSettled = false;
   let clientReleased = false;
   const releaseClient = () => {
-    if (clientReleased) return;
+    if (clientReleased || !client) return;
     clientReleased = true;
     client.release();
   };
