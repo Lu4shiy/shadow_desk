@@ -1224,7 +1224,7 @@ async function checkActiveBattle() {
   try {
     const res = await apiFetch('/api/active-battle');
     if (res.battle_id) {
-      showActiveBattleBanner(res.battle_id, res.remaining_reconnect_sec || 60);
+      showActiveBattleBanner(res.battle_id, res.remaining_reconnect_sec ?? 60);
     } else {
       hideActiveBattleBanner();
     }
