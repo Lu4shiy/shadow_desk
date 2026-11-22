@@ -660,6 +660,13 @@ app.get('/api/battle/invites', telegramAuth, playerAuth, async (req, res) => {
       WHERE bi.from_player_id = $1
         AND bi.status IN ('pending', 'accepted')
         AND bi.expires_at > NOW() - INTERVAL '5 minutes'
+        AND (
+          bi.status = 'pending'
+          OR EXISTS (
+            SELECT 1 FROM battles b
+            WHERE b.id = bi.battle_id AND b.status = 'active'
+          )
+        )
       ORDER BY bi.created_at DESC
     `, [req.player.id]);
 
