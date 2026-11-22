@@ -936,7 +936,7 @@ async function createBattle(player1Id, player2Id, client) {
     [player1Id]
   );
   const deckRes2 = await client.query(
-    'SELECT inv.id as inv_id, c.* FROM player_inventory inv JOIN cards c ON inv.card_id = $2 AND inv.in_deck = TRUE',
+    'SELECT inv.id as inv_id, c.* FROM player_inventory inv JOIN cards c ON inv.card_id = c.id WHERE inv.player_id = $1 AND inv.in_deck = TRUE',
     [player2Id]
   );
   const playersRes = await client.query(
