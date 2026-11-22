@@ -7,6 +7,7 @@ import {
   UNTARGETABLE,
   makeCardState,
   canPlayCard,
+  spendCardEnergy,
   startTurn,
   applyCardEffect,
   applyDamage,
@@ -90,6 +91,15 @@ test('Energy uses cards.energy exactly, including zero-energy cards', () => {
   assert.equal(cost0.energyCost, 0);
   assert.equal(canPlayCard({ ...p, energy: 0 }, cost0), true);
   assert.equal(canPlayCard({ ...p, energy: 7 }, cost7), true);
+
+  const exactPlayer = { ...p, energy: 7 };
+  assert.equal(spendCardEnergy(exactPlayer, cost7), 0);
+  assert.equal(exactPlayer.energy, 0);
+
+  const zeroPlayer = { ...p, energy: 0 };
+  assert.equal(spendCardEnergy(zeroPlayer, cost0), 0);
+  assert.equal(zeroPlayer.energy, 0);
+  assert.throws(() => spendCardEnergy({ ...p, energy: 5 }, cost7), /Недостаточно энергии/);
 });
 
 test('A 0-energy spell resolves without spending energy and grants its described energy', () => {
