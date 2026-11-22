@@ -91,7 +91,7 @@ function flashScreen(color) {
 
 // ==================== ЖИЗНЕННЫЙ ЦИКЛ ====================
 
-function joinBattle(rawBattleId) {
+function joinBattleInternal(rawBattleId) {
   try {
     const battleId = parseInt(rawBattleId);
     if (!battleId || isNaN(battleId)) {
@@ -171,7 +171,7 @@ function joinBattle(rawBattleId) {
   }
 }
 
-function leaveBattle() {
+function leaveBattleInternal() {
   if (battlePollTimer) { clearInterval(battlePollTimer); battlePollTimer = null; }
   if (turnTimerInterval) { clearInterval(turnTimerInterval); turnTimerInterval = null; }
   document.getElementById('battle-screen').classList.remove('active');
@@ -210,7 +210,7 @@ async function fetchBattleState() {
     detectFeedback();
   } catch (err) {
     console.error('fetchBattle:', err);
-    if (err.message && err.message.includes('не найден')) leaveBattle();
+    if (err.message && err.message.includes('не найден')) leaveBattleInternal();
   }
 }
 
@@ -583,7 +583,7 @@ function updateReconnectOverlayTick() {
 // ==================== СДАЧА ====================
 function handleSurrender() {
   if (!currentBattleId || !currentBattleState) return;
-  if (currentBattleState.status !== 'active') { leaveBattle(); return; }
+  if (currentBattleState.status !== 'active') { leaveBattleInternal(); return; }
 
   const modal = document.getElementById('b-surrender-modal');
   modal.style.display = 'flex';
@@ -702,8 +702,8 @@ document.addEventListener('keydown', (e) => {
 
 // ==================== ЭКСПОРТ В WINDOW (сразу, до любой инициализации) ====================
 // Делаем ДО IIFE, чтобы даже если IIFE упадёт — joinBattle доступен из app.js
-window.joinBattle = function(id) { return joinBattle(id); };
-window.leaveBattle = function() { return leaveBattle(); };
+window.joinBattle = function(id) { return joinBattleInternal(id); };
+window.leaveBattle = function() { return leaveBattleInternal(); };
 console.log('[battle.js] window.joinBattle установлен');
 
 // ==================== ПРИВЯЗКА (изолированно, чтобы не сломать экспорт) ====================
@@ -721,7 +721,7 @@ try {
   }
 
   const resultBackBtn = document.getElementById('b-result-back');
-  if (resultBackBtn) resultBackBtn.onclick = leaveBattle;
+  if (resultBackBtn) resultBackBtn.onclick = leaveBattleInternal;
 
   const oppInfoEl = document.querySelectorAll('.b-info')[0];
   if (oppInfoEl) {
