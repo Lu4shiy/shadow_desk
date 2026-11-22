@@ -3,7 +3,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import pg from 'pg';
 import crypto from 'crypto';
-import { CARD_TARGETS, UNTARGETABLE, makeCardState, startTurn, applyDamage, isBattleStarted, checkBattleEnd, canPlayCard, isNegativeTargetProtected, applyCardEffect, resolveAttack } from './battle-engine.js';
+import { CARD_TARGETS, UNTARGETABLE, makeCardState, startTurn, applyDamage, isBattleStarted, checkBattleEnd, canPlayCard, spendCardEnergy, isNegativeTargetProtected, applyCardEffect, resolveAttack } from './battle-engine.js';
 
 const { Pool } = pg;
 const __filename = fileURLToPath(import.meta.url);
@@ -1290,7 +1290,7 @@ app.post('/api/battle/:id/play', telegramAuth, playerAuth, loadBattle, async (re
 
     // === Применение ===
     p.hand = p.hand.filter(id => Number(id) !== invId);
-    p.energy -= Number(card.energyCost ?? card.cost);
+    spendCardEnergy(p, card);
 
     if (card.type === 'Персонаж') {
       p.board.push(invId);
