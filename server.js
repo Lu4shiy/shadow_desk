@@ -960,7 +960,7 @@ async function createBattle(player1Id, player2Id, client) {
   const now = Date.now();
   const state = {
     p1: { player: playerMap[player1Id], hp: 30, maxHp: 30, energy: 10, maxEnergy: 10, hand: [], board: [], turnNumber: 0, lastSeen: now, enteredBattle: false, heroShield: false, skipMagicPhase: false, skipNextMagicPhase: false },
-    p2: { player: playerMap[player2Id], hp: 30, maxHp: 30, energy: 10, maxEnergy: 10, hand: [], board: [], turnNumber: 0, lastSeen: now, enteredBattle: false, heroShield: false, skipMagicPhase: false, skipNextMagicPhase: false }
+    p2: { player: playerMap[player2Id], hp: 30, maxHp: 30, energy: 10, maxEnergy: 10, hand: [], board: [], turnNumber: 0, lastSeen: now, enteredBattle: false, heroShield: false, skipMagicPhase: false, skipNextMagicPhase: false },
     cards: {},
     currentTurnPlayer: 'p1',
     status: 'active',
