@@ -585,6 +585,7 @@ async function endTurn() {
 
 // ==================== ТАЙМЕР ====================
 function updateTimerDisplay() {
+  updateStartCountdown();
   const el = document.getElementById('b-timer');
   if (!el) return;
   if (currentOppDiscSec > OPP_DISC_THRESHOLD) { el.style.color = '#666'; return; }
