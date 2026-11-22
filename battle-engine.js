@@ -57,6 +57,16 @@ export function canPlayCard(player, card) {
   const cost = Number(card?.energyCost ?? card?.cost);
   return Boolean(player && card && player.skipMagicPhase !== true && Number.isFinite(cost) && cost >= 0 && Number(player.energy) >= cost);
 }
+
+export function spendCardEnergy(player, card) {
+  if (!canPlayCard(player, card)) {
+    const error = new Error('Недостаточно энергии или пропущена фаза магии');
+    error.statusCode = 400;
+    throw error;
+  }
+  player.energy -= Number(card.energyCost ?? card.cost);
+  return player.energy;
+}
 export function isNegativeTargetProtected(state, target, casterKey) {
   if (!target) return false;
   if (target.immuneNegativeUntilTurn != null) return (Number(state.turnCounter) || 0) <= Number(target.immuneNegativeUntilTurn);
