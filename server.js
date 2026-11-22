@@ -687,7 +687,7 @@ app.post('/api/battle/invite/accept', telegramAuth, playerAuth, async (req, res)
 
     // Блокируем приглашение, в том числе для безопасного повторного запроса.
     const inviteRes = await client.query(
-      'SELECT id, from_player_id, to_player_id, status, battle_id, expires_at FROM battle_invites WHERE id = $1 AND to_player_id = $2 FOR UPDATE',
+      'SELECT id, from_player_id, to_player_id, status, battle_id, (expires_at > NOW()) AS is_valid FROM battle_invites WHERE id = $1 AND to_player_id = $2 FOR UPDATE',
       [invite_id, req.player.id]
     );
     if (inviteRes.rows.length === 0) {
@@ -731,7 +731,7 @@ app.post('/api/battle/invite/accept', telegramAuth, playerAuth, async (req, res)
       return res.status(400).json({ error: 'Приглашение уже недействительно' });
     }
 
-    if (!invite.expires_at || new Date(invite.expires_at).getTime() <= Date.now()) {
+    if (!invite.is_valid) {
       await client.query('ROLLBACK');
       transactionOpen = false;
       return res.status(400).json({ error: 'Срок действия приглашения истёк' });
@@ -762,6 +762,9 @@ app.post('/api/battle/invite/accept', telegramAuth, playerAuth, async (req, res)
        WHERE id = $2`,
       [battleId, invite.id]
     );
+
+    invite.status = 'accepted';
+    invite.battle_id = battleId;
 
     // Закрываем встречный инвайт тем же боем, чтобы оба клиента получили один battle_id.
     await client.query(
