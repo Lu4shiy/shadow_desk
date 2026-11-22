@@ -1213,11 +1213,29 @@ let activeBattleTimerInterval = null;
 async function refreshProfile() {
   try {
     const data = await apiFetch('/api/me');
+    if (!data || !data.profile) return;
+
     currentProfile = data.profile;
-    document.getElementById('ui-coins').textContent = currentProfile.coins || 0;
-    document.getElementById('ui-crystals').textContent = currentProfile.crystals || 0;
-    document.getElementById('ui-mana').textContent = currentProfile.mana || 0;
-  } catch (e) {}
+    const profile = currentProfile;
+    const setText = (id, value) => {
+      const element = document.getElementById(id);
+      if (element) element.textContent = value;
+    };
+
+    setText('ui-nickname', profile.nickname || 'Игрок');
+    setText('ui-id', profile.id ?? 0);
+    setText('ui-level', profile.level ?? 1);
+    setText('ui-xp', profile.xp ?? 0);
+    setText('ui-max-xp', (profile.level ?? 1) * 1000);
+    setText('ui-coins', profile.coins ?? 0);
+    setText('ui-crystals', profile.crystals ?? 0);
+    setText('ui-mana', profile.mana ?? 0);
+
+    const avatar = document.getElementById('ui-avatar');
+    if (avatar && profile.avatar_url) avatar.src = profile.avatar_url;
+  } catch (e) {
+    console.error('refreshProfile:', e);
+  }
 }
 
 async function checkActiveBattle() {
