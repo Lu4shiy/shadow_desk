@@ -26,6 +26,7 @@ let handStartScroll = 0;
 
 const OPP_DISC_THRESHOLD = 4;
 const OPP_DISC_LIMIT = 60;
+let lastMagicSkipNotice = null;
 
 const CARD_TARGETS = {
   'Каменная кожа': 'friendly',
@@ -347,6 +348,11 @@ function renderBattle(battle) {
   renderBoardSection('b-opp-board', opp.board, st.cards, oppKey, myKey, myTurn, 'oppBoard');
   renderBoardSection('b-my-board', me.board, st.cards, myKey, oppKey, myTurn, 'myBoard');
   renderHandSection(me.hand, st.cards, me.energy, myTurn, st.status === 'active' && battleReady);
+  const skipNoticeKey = `${battle.id}:${me.turnNumber}`;
+  if (me.skipMagicPhase && lastMagicSkipNotice !== skipNoticeKey) {
+    lastMagicSkipNotice = skipNoticeKey;
+    bShowToast('Кража разума: в этом ходу вы не можете разыгрывать карты');
+  }
 
   if (st.status === 'finished') {
     showBattleResult(st.winner === myKey ? 'win' : (st.winner === null ? 'draw' : 'lose'));
@@ -407,12 +413,13 @@ function renderBoardSection(containerId, board, cards, ownerKey, otherKey, myTur
   });
 }
 
-function buildHandHtml(hand, cards, energy, myTurn, active) {
+function buildHandHtml(hand, cards, energy, myTurn, active, magicPhaseAvailable = true) {
   if (!hand || hand.length === 0) return '';
   return hand.map(invId => {
     const c = cards[invId] || cards[String(invId)];
     if (!c) return '';
-    const playable = active && myTurn && c.cost <= energy;
+    const energyCost = Number(c.energyCost ?? c.cost ?? 0);
+    const playable = active && myTurn && magicPhaseAvailable && Number.isFinite(energyCost) && energyCost >= 0 && energyCost <= energy;
     const imgUrl = cardImgUrl(c);
     const img = imgUrl
       ? `<img src="${imgUrl}" alt="" draggable="false" />`
@@ -428,7 +435,7 @@ function buildHandHtml(hand, cards, energy, myTurn, active) {
 }
 
 function renderHandSection(hand, cards, energy, myTurn, active) {
-  const html = buildHandHtml(hand, cards, energy, myTurn, active);
+  const html = buildHandHtml(hand, cards, energy, myTurn, active, !currentBattleState?.[currentPlayerKey]?.skipMagicPhase);
   const h = hashStr(html);
   if (h === sectionHashes.hand) return;
   sectionHashes.hand = h;
@@ -456,7 +463,11 @@ function onHandCardClick(invId) {
   if (!card) return;
   if (!isBattleStarted(currentBattleState)) return;
 
-  if (card.cost > me.energy) {
+  if (me.skipMagicPhase) {
+    bShowToast('В этом ходу вы пропускаете фазу магии');
+    return;
+  }
+  if (Number(card.energyCost ?? card.cost ?? 0) > me.energy) {
     bShowToast('Недостаточно энергии');
     return;
   }
@@ -500,6 +511,8 @@ function cancelTargetMode() {
 }
 
 function onBoardCardClick(el, ownerKey) {
+  const board = el.closest('.b-board');
+  if (board && Number(board.dataset.suppressClickUntil || 0) > Date.now()) return;
   if (!currentBattleState || currentBattleState.status !== 'active') return;
   if (!isBattleStarted(currentBattleState)) return;
 
@@ -701,6 +714,56 @@ function showBattleResult(kind) {
   }
 }
 
+function setupBoardScroll() {
+  document.querySelectorAll('.b-board').forEach(board => {
+    if (board.dataset.boardScrollBound === '1') return;
+    board.dataset.boardScrollBound = '1';
+    let pointerId = null;
+    let startX = 0;
+    let startScroll = 0;
+    let dragged = false;
+
+    const finish = event => {
+      if (pointerId === null || (event && event.pointerId !== pointerId)) return;
+      const previousPointer = pointerId;
+      pointerId = null;
+      if (dragged) board.dataset.suppressClickUntil = String(Date.now() + 350);
+      dragged = false;
+      board.classList.remove('dragging');
+      try {
+        if (board.hasPointerCapture?.(previousPointer)) board.releasePointerCapture(previousPointer);
+      } catch (error) {}
+    };
+
+    board.addEventListener('pointerdown', event => {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      if (board.scrollWidth <= board.clientWidth) return;
+      pointerId = event.pointerId;
+      startX = event.clientX;
+      startScroll = board.scrollLeft;
+      dragged = false;
+      try { board.setPointerCapture(event.pointerId); } catch (error) {}
+    });
+
+    board.addEventListener('pointermove', event => {
+      if (pointerId === null || event.pointerId !== pointerId) return;
+      const deltaX = startX - event.clientX;
+      if (!dragged && Math.abs(deltaX) > 6) {
+        dragged = true;
+        board.classList.add('dragging');
+      }
+      if (dragged) {
+        board.scrollLeft = startScroll + deltaX;
+        if (event.cancelable) event.preventDefault();
+      }
+    });
+
+    board.addEventListener('pointerup', finish);
+    board.addEventListener('pointercancel', finish);
+    board.addEventListener('lostpointercapture', finish);
+  });
+}
+
 // ==================== СКРОЛЛ РУКИ ====================
 function setupHandScroll() {
   const handEl = document.getElementById('b-hand');
@@ -788,6 +851,7 @@ try {
   if (targetCancel) targetCancel.onclick = cancelTargetMode;
 
   setupHandScroll();
+  setupBoardScroll();
   console.log('[battle.js] события привязаны');
 } catch (e) {
   console.error('[battle.js] Ошибка при привязке событий:', e);
