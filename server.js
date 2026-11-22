@@ -677,28 +677,50 @@ app.get('/api/battle/invites', telegramAuth, playerAuth, async (req, res) => {
 // Принять инвайт
 app.post('/api/battle/invite/accept', telegramAuth, playerAuth, async (req, res) => {
   const { invite_id } = req.body;
-  try {
-    const result = await pool.query(
-      `UPDATE battle_invites SET status = 'accepted'
-       WHERE id = $1 AND to_player_id = $2 AND status = 'pending' AND expires_at > NOW()
-       RETURNING from_player_id, to_player_id, id`,
-      [invite_id, req.player.id]
-    );
-    if (result.rows.length === 0) return res.status(400).json({ error: 'Приглашение не найдено или истекло' });
+  const client = await pool.connect();
+  let transactionOpen = false;
 
-    const invite = result.rows[0];
-    let battleId = null;
-    try {
-      battleId = await createBattle(invite.from_player_id, invite.to_player_id);
-      await pool.query('UPDATE battle_invites SET battle_id = $1 WHERE id = $2', [battleId, invite.id]);
-    } catch (e) {
-      await pool.query(`UPDATE battle_invites SET status = 'pending' WHERE id = $1`, [invite.id]);
-      return res.status(400).json({ error: e.message });
+  try {
+    await client.query('BEGIN');
+    transactionOpen = true;
+
+    // Блокируем само приглашение: два параллельных accept не создадут два боя.
+    const inviteRes = await client.query(
+      'SELECT id, from_player_id, to_player_id FROM battle_invites WHERE id = $1 AND to_player_id = $2 AND status = $3 AND expires_at > NOW() FOR UPDATE',
+      [invite_id, req.player.id, 'pending']
+    );
+    if (inviteRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
+      return res.status(400).json({ error: 'Приглашение не найдено или истекло' });
     }
 
-    res.json({ success: true, invite, battle_id: battleId });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    const invite = inviteRes.rows[0];
+    await client.query(
+      'UPDATE battle_invites SET status = $1 WHERE id = $2',
+      ['accepted', invite.id]
+    );
+
+    const battleId = await createBattle(invite.from_player_id, invite.to_player_id, client);
+    await client.query(
+      'UPDATE battle_invites SET battle_id = $1 WHERE id = $2',
+      [battleId, invite.id]
+    );
+
+    await client.query('COMMIT');
+    transactionOpen = false;
+    return res.json({ success: true, invite, battle_id: battleId });
+  } catch (error) {
+    if (transactionOpen) {
+      try { await client.query('ROLLBACK'); } catch (rollbackError) {}
+      transactionOpen = false;
+    }
+    console.error('Accept battle invite failed:', error);
+    return res.status(error.statusCode || 500).json({
+      error: error.message || 'Не удалось принять приглашение'
+    });
+  } finally {
+    client.release();
   }
 });
 
@@ -791,7 +813,7 @@ app.post('/api/battle/matchmaking', telegramAuth, playerAuth, async (req, res) =
   } catch (err) {
     try { await client.query('ROLLBACK'); } catch(e) {}
     client.release();
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 
@@ -881,22 +903,61 @@ function checkBattleEnd(state) {
   else if (state.p2.hp <= 0) { state.status = 'finished'; state.winner = 'p1'; }
 }
 
-async function createBattle(player1Id, player2Id, clientOrPool = pool) {
-  // ВАЖНО: последовательные запросы, а НЕ Promise.all —
-  // postgres-клиент (из pool.connect()) не поддерживает параллельные запросы на одном соединении
-  const deckRes1 = await clientOrPool.query(`SELECT inv.id as inv_id, c.* FROM player_inventory inv
-                        JOIN cards c ON inv.card_id = c.id
-                        WHERE inv.player_id = $1 AND inv.in_deck = TRUE`, [player1Id]);
-  const deckRes2 = await clientOrPool.query(`SELECT inv.id as inv_id, c.* FROM player_inventory inv
-                        JOIN cards c ON inv.card_id = c.id
-                        WHERE inv.player_id = $1 AND inv.in_deck = TRUE`, [player2Id]);
-  const playersRes = await clientOrPool.query(`SELECT id, nickname, avatar_url, level FROM players WHERE id = ANY($1)`, [[player1Id, player2Id]]);
+async function createBattle(player1Id, player2Id, client) {
+  if (!client || typeof client.query !== 'function' || typeof client.release !== 'function') {
+    throw new Error('Создание боя должно выполняться внутри транзакции');
+  }
 
-  const deck1 = deckRes1.rows, deck2 = deckRes2.rows;
-  if (deck1.length !== 12 || deck2.length !== 12) throw new Error('У обоих игроков должно быть по 12 карт в колоде');
+  const playerIds = [...new Set([Number(player1Id), Number(player2Id)])].sort((a, b) => a - b);
+  if (playerIds.length !== 2 || playerIds.some(id => !Number.isInteger(id) || id <= 0)) {
+    const error = new Error('Некорректные игроки для создания боя');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  // Одинаковый порядок блокировок исключает дедлоки при встречных приглашениях.
+  for (const playerId of playerIds) {
+    await client.query('SELECT pg_advisory_xact_lock(92731, $1::int)', [playerId]);
+  }
+
+  // Один игрок не может одновременно оказаться в двух активных боях.
+  const activeBattleRes = await client.query(
+    'SELECT id FROM battles WHERE status = $1 AND (player1_id = ANY($2::int[]) OR player2_id = ANY($2::int[])) LIMIT 1',
+    ['active', playerIds]
+  );
+  if (activeBattleRes.rows.length > 0) {
+    const error = new Error('Один из игроков уже участвует в активном бою');
+    error.statusCode = 409;
+    throw error;
+  }
+
+  const deckRes1 = await client.query(
+    'SELECT inv.id as inv_id, c.* FROM player_inventory inv JOIN cards c ON inv.card_id = c.id WHERE inv.player_id = $1 AND inv.in_deck = TRUE',
+    [player1Id]
+  );
+  const deckRes2 = await client.query(
+    'SELECT inv.id as inv_id, c.* FROM player_inventory inv JOIN cards c ON inv.card_id = $2 AND inv.in_deck = TRUE',
+    [player2Id]
+  );
+  const playersRes = await client.query(
+    'SELECT id, nickname, avatar_url, level FROM players WHERE id = ANY($1::int[])',
+    [playerIds]
+  );
+
+  const deck1 = deckRes1.rows;
+  const deck2 = deckRes2.rows;
+  if (deck1.length !== 12 || deck2.length !== 12) {
+    const error = new Error('У обоих игроков должно быть по 12 карт в колоде');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (playersRes.rows.length !== 2) {
+    const error = new Error('Один из игроков не найден');
+    error.statusCode = 404;
+    throw error;
+  }
 
   const playerMap = Object.fromEntries(playersRes.rows.map(p => [p.id, p]));
-
   const now = Date.now();
   const state = {
     p1: { player: playerMap[player1Id], hp: 30, maxHp: 30, energy: 10, maxEnergy: 10, hand: [], board: [], turnNumber: 0, lastSeen: now, enteredBattle: false, heroShield: false },
@@ -915,7 +976,7 @@ async function createBattle(player1Id, player2Id, clientOrPool = pool) {
 
   startTurn(state, 'p1');
 
-  const result = await clientOrPool.query(
+  const result = await client.query(
     'INSERT INTO battles (player1_id, player2_id, state) VALUES ($1, $2, $3) RETURNING id',
     [player1Id, player2Id, JSON.stringify(state)]
   );
@@ -923,29 +984,105 @@ async function createBattle(player1Id, player2Id, clientOrPool = pool) {
 }
 
 async function loadBattle(req, res, next) {
-  const battleId = parseInt(req.params.id);
+  const battleId = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(battleId) || battleId <= 0) {
+    return res.status(400).json({ error: 'Некорректный ID боя' });
+  }
+
+  const client = await pool.connect();
+  let transactionSettled = false;
+  let clientReleased = false;
+  const releaseClient = () => {
+    if (clientReleased) return;
+    clientReleased = true;
+    client.release();
+  };
+
   try {
-    const result = await pool.query('SELECT * FROM battles WHERE id = $1', [battleId]);
-    if (result.rows.length === 0) return res.status(404).json({ error: 'Бой не найден' });
+    await client.query('BEGIN');
+    const result = await client.query('SELECT * FROM battles WHERE id = $1 FOR UPDATE', [battleId]);
+    if (result.rows.length === 0) {
+      await client.query('ROLLBACK');
+      transactionSettled = true;
+      releaseClient();
+      return res.status(404).json({ error: 'Бой не найден' });
+    }
+
     const battle = result.rows[0];
     if (battle.player1_id !== req.player.id && battle.player2_id !== req.player.id) {
+      await client.query('ROLLBACK');
+      transactionSettled = true;
+      releaseClient();
       return res.status(403).json({ error: 'Вы не участвуете в этом бою' });
     }
+
     req.battle = battle;
+    req.battleClient = client;
     req.playerKey = battle.player1_id === req.player.id ? 'p1' : 'p2';
     req.oppKey = req.playerKey === 'p1' ? 'p2' : 'p1';
-    // Обновляем lastSeen и флаг входа
+
     if (battle.state[req.playerKey]) {
       battle.state[req.playerKey].lastSeen = Date.now();
       battle.state[req.playerKey].enteredBattle = true;
     }
+
+    // Ответ отправляется только после COMMIT/ROLLBACK: все запросы одного боя сериализованы.
+    const originalJson = res.json.bind(res);
+    res.json = function(payload) {
+      if (transactionSettled) return res;
+      transactionSettled = true;
+
+      (async () => {
+        let commitError = null;
+        try {
+          if (res.statusCode >= 500) await client.query('ROLLBACK');
+          else await client.query('COMMIT');
+        } catch (error) {
+          commitError = error;
+          try { await client.query('ROLLBACK'); } catch (rollbackError) {}
+        } finally {
+          releaseClient();
+        }
+
+        if (res.destroyed || res.writableEnded) return;
+        if (commitError) {
+          console.error('Battle transaction commit failed:', commitError);
+          res.statusCode = 500;
+          return originalJson({ error: 'Не удалось сохранить состояние боя' });
+        }
+        return originalJson(payload);
+      })().catch(error => {
+        console.error('Battle response finalization failed:', error);
+        releaseClient();
+        if (!res.destroyed && !res.writableEnded && !res.headersSent) {
+          res.statusCode = 500;
+          originalJson({ error: 'Не удалось завершить запрос боя' });
+        }
+      });
+
+      return res;
+    };
+
+    res.once('close', () => {
+      if (transactionSettled) return;
+      transactionSettled = true;
+      client.query('ROLLBACK').catch(() => {}).finally(releaseClient);
+    });
+
     next();
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (error) {
+    if (!transactionSettled) {
+      transactionSettled = true;
+      try { await client.query('ROLLBACK'); } catch (rollbackError) {}
+    }
+    releaseClient();
+    console.error('loadBattle failed:', error);
+    if (!res.headersSent) return res.status(500).json({ error: error.message });
+  }
 }
 
-async function giveRewards(battle) {
+async function giveRewards(battle, client) {
   if (battle.state.rewards_given) return;
-  battle.state.rewards_given = true;
 
   const isDraw = battle.state.winner === null;
   const p1Win = battle.state.winner === 'p1';
@@ -960,37 +1097,53 @@ async function giveRewards(battle) {
   const r1 = calc(p1Win);
   const r2 = calc(p2Win);
 
-  try {
-    await pool.query('UPDATE players SET xp = xp + $1, coins = coins + $2, mana = mana + $3 WHERE id = $4', [r1.xp, r1.coins, r1.mana, battle.player1_id]);
-    await pool.query('UPDATE players SET xp = xp + $1, coins = coins + $2, mana = mana + $3 WHERE id = $4', [r2.xp, r2.coins, r2.mana, battle.player2_id]);
+  // Начисление, выдача карты и флаг rewards_given находятся в одной транзакции.
+  await client.query(
+    'UPDATE players SET xp = xp + $1, coins = coins + $2, mana = mana + $3 WHERE id = $4',
+    [r1.xp, r1.coins, r1.mana, battle.player1_id]
+  );
+  await client.query(
+    'UPDATE players SET xp = xp + $1, coins = coins + $2, mana = mana + $3 WHERE id = $4',
+    [r2.xp, r2.coins, r2.mana, battle.player2_id]
+  );
 
-    // 20% шанс пака на победу
-    if (p1Win && Math.random() < 0.2) {
-      r1.pack = true;
-      await pool.query('INSERT INTO player_inventory (player_id, card_id, is_new) SELECT $1, id, TRUE FROM cards ORDER BY RANDOM() LIMIT 1', [battle.player1_id]);
-    }
-    if (p2Win && Math.random() < 0.2) {
-      r2.pack = true;
-      await pool.query('INSERT INTO player_inventory (player_id, card_id, is_new) SELECT $1, id, TRUE FROM cards ORDER BY RANDOM() LIMIT 1', [battle.player2_id]);
-    }
+  if (p1Win && Math.random() < 0.2) {
+    const pack = await client.query(
+      'INSERT INTO player_inventory (player_id, card_id, is_new) SELECT $1, id, TRUE FROM cards ORDER BY RANDOM() LIMIT 1 RETURNING id',
+      [battle.player1_id]
+    );
+    r1.pack = pack.rowCount > 0;
+  }
+  if (p2Win && Math.random() < 0.2) {
+    const pack = await client.query(
+      'INSERT INTO player_inventory (player_id, card_id, is_new) SELECT $1, id, TRUE FROM cards ORDER BY RANDOM() LIMIT 1 RETURNING id',
+      [battle.player2_id]
+    );
+    r2.pack = pack.rowCount > 0;
+  }
 
-    battle.state.p1.rewards = r1;
-    battle.state.p2.rewards = r2;
-    battle.state.log.push('🎁 Награды начислены');
-  } catch (e) { console.error('Reward error:', e); }
+  battle.state.p1.rewards = r1;
+  battle.state.p2.rewards = r2;
+  battle.state.rewards_given = true;
+  if (!Array.isArray(battle.state.log)) battle.state.log = [];
+  battle.state.log.push('🎁 Награды начислены');
 }
 
-async function saveBattleState(battle) {
+async function saveBattleState(battle, client) {
+  if (!client || typeof client.query !== 'function') {
+    throw new Error('Сохранение боя должно выполняться внутри транзакции');
+  }
+
+  if (battle.state.status === 'finished') {
+    await giveRewards(battle, client);
+  }
+
   const winnerId = battle.state.winner === 'p1' ? battle.player1_id
                  : battle.state.winner === 'p2' ? battle.player2_id : null;
-  await pool.query(
+  await client.query(
     'UPDATE battles SET state = $1, status = $2, winner_id = $3, updated_at = NOW() WHERE id = $4',
     [JSON.stringify(battle.state), battle.state.status, winnerId, battle.id]
   );
-
-  if (battle.state.status === 'finished') {
-    await giveRewards(battle);
-  }
 }
 
 // ==================== ЭФФЕКТЫ КАРТ ====================
@@ -1327,7 +1480,7 @@ app.get('/api/battle/:id', telegramAuth, playerAuth, loadBattle, async (req, res
       startTurn(state, next);
     }
 
-    await saveBattleState(req.battle);
+    await saveBattleState(req.battle, req.battleClient);
 
     const view = JSON.parse(JSON.stringify(state));
     const oppHand = view[oppKey].hand || [];
@@ -1417,7 +1570,7 @@ app.post('/api/battle/:id/play', telegramAuth, playerAuth, loadBattle, async (re
     applyCardEffect(state, req.playerKey, req.oppKey, card, targetId);
     checkBattleEnd(state); // эффекты могут убить игрока (Кровавый ритуал, Абсолютное безумие и т.д.)
 
-    await saveBattleState(req.battle);
+    await saveBattleState(req.battle, req.battleClient);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -1492,7 +1645,7 @@ app.post('/api/battle/:id/attack', telegramAuth, playerAuth, loadBattle, async (
     }
 
     checkBattleEnd(state);
-    await saveBattleState(req.battle);
+    await saveBattleState(req.battle, req.battleClient);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -1505,7 +1658,7 @@ app.post('/api/battle/:id/end-turn', telegramAuth, playerAuth, loadBattle, async
     if (state.currentTurnPlayer !== req.playerKey) return res.status(400).json({ error: 'Не ваш ход' });
 
     startTurn(state, req.oppKey);
-    await saveBattleState(req.battle);
+    await saveBattleState(req.battle, req.battleClient);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -1532,21 +1685,34 @@ app.post('/api/battle/:id/surrender', telegramAuth, playerAuth, loadBattle, asyn
       state.log.push('Сдача');
     }
 
-    await saveBattleState(req.battle);
+    await saveBattleState(req.battle, req.battleClient);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Активный бой (для reconnect-баннера)
 app.get('/api/active-battle', telegramAuth, playerAuth, async (req, res) => {
+  const client = await pool.connect();
+  let transactionOpen = false;
+
+  const commitResponse = async (payload) => {
+    await client.query('COMMIT');
+    transactionOpen = false;
+    return res.json(payload);
+  };
+
   try {
-    const result = await pool.query(
-      `SELECT * FROM battles
-       WHERE status = 'active' AND (player1_id = $1 OR player2_id = $1)
-       ORDER BY id DESC LIMIT 1`,
-      [req.player.id]
+    await client.query('BEGIN');
+    transactionOpen = true;
+
+    // Проверка и изменение reconnect-состояния выполняются под блокировкой строки боя.
+    const result = await client.query(
+      'SELECT * FROM battles WHERE status = $1 AND (player1_id = $2 OR player2_id = $2) ORDER BY id DESC LIMIT 1 FOR UPDATE',
+      ['active', req.player.id]
     );
-    if (result.rows.length === 0) return res.json({ success: true, battle_id: null });
+    if (result.rows.length === 0) {
+      return await commitResponse({ success: true, battle_id: null });
+    }
 
     const battle = result.rows[0];
     const myKey = battle.player1_id === req.player.id ? 'p1' : 'p2';
@@ -1557,17 +1723,14 @@ app.get('/api/active-battle', telegramAuth, playerAuth, async (req, res) => {
 
     const myEntered = state[myKey]?.enteredBattle === true;
     const oppEntered = state[oppKey]?.enteredBattle === true;
-
     const myLastSeen = myEntered ? (state[myKey]?.lastSeen || 0) : createdAt;
     const oppLastSeen = oppEntered ? (state[oppKey]?.lastSeen || 0) : createdAt;
     const myGoneSec = (now - myLastSeen) / 1000;
     const oppGoneSec = (now - oppLastSeen) / 1000;
 
-    // === Игрок ещё НЕ входил в бой ===
-    // Это НЕ реконнект, а первый вход. Не показываем баннер (игрок войдёт через accept/loadInvites).
+    // Первый вход: reconnect-баннер не нужен, но через 60 секунд бой завершается.
     if (!myEntered) {
-      if (state.status === 'active' && myGoneSec > 60) {
-        // Слишком долго не заходил — тех. поражение
+      if (myGoneSec > 60) {
         if (oppGoneSec > 60) {
           state.status = 'finished';
           state.winner = null;
@@ -1578,13 +1741,13 @@ app.get('/api/active-battle', telegramAuth, playerAuth, async (req, res) => {
           state[myKey].hp = 0;
           state.log.push('Вы не зашли в бой');
         }
-        await saveBattleState(battle);
-        return res.json({ success: true, battle_id: null, finished: true });
+        await saveBattleState(battle, client);
+        return await commitResponse({ success: true, battle_id: null, finished: true });
       }
-      return res.json({ success: true, battle_id: null });
+      return await commitResponse({ success: true, battle_id: null });
     }
 
-    // === Игрок ВХОДИЛ — проверяем реконнект ===
+    // Игрок уже входил: применяем общий 60-секундный лимит переподключения.
     if (state.status === 'active') {
       if (myGoneSec > 60 && oppGoneSec > 60) {
         state.status = 'finished';
@@ -1601,25 +1764,35 @@ app.get('/api/active-battle', telegramAuth, playerAuth, async (req, res) => {
         state[oppKey].hp = 0;
         state.log.push('⏱ Соперник не вернулся');
       }
+
       if (state.status === 'finished') {
-        await saveBattleState(battle);
-        return res.json({ success: true, battle_id: null, finished: true });
+        await saveBattleState(battle, client);
+        return await commitResponse({ success: true, battle_id: null, finished: true });
       }
     }
 
-    // Баннер только если реально отсутствовал > 5 сек
+    // Не показываем баннер, пока игрок отсутствовал меньше пяти секунд.
     if (myGoneSec < 5) {
-      return res.json({ success: true, battle_id: null });
+      return await commitResponse({ success: true, battle_id: null });
     }
 
-    res.json({
+    return await commitResponse({
       success: true,
       battle_id: battle.id,
       my_gone_sec: Math.floor(myGoneSec),
       opp_gone_sec: Math.floor(oppGoneSec),
       remaining_reconnect_sec: Math.max(0, 60 - Math.floor(myGoneSec))
     });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (error) {
+    if (transactionOpen) {
+      try { await client.query('ROLLBACK'); } catch (rollbackError) {}
+      transactionOpen = false;
+    }
+    console.error('active-battle failed:', error);
+    if (!res.headersSent) return res.status(500).json({ error: error.message });
+  } finally {
+    client.release();
+  }
 });
 
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
